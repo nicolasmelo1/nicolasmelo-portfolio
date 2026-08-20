@@ -1,0 +1,11 @@
+# Generated mutation fixture for L6.BROWSER_MODEL_CONFIG_IS_VERIFIED. It is supposed to fail.
+version: 1
+project:
+  name: mutation-L6.BROWSER_MODEL_CONFIG_IS_VERIFIED
+  languages: [typescript]
+docs:
+  scan: ["docs/**/*.md"]
+gates: {}
+rules:
+  L6.BROWSER_MODEL_CONFIG_IS_VERIFIED:
+    enabled: true

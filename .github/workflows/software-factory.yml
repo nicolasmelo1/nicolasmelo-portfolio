@@ -1,0 +1,79 @@
+name: software factory
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  factory:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install sf
+        run: cargo install --git https://github.com/nicolasmelo1/software-factory --locked
+      # verify first: a check that stopped firing makes the run below
+      # meaningless, and it is the cheaper failure to discover.
+      - name: Prove the checks still fire
+        run: sf verify
+      - name: Check the repository
+        run: sf check --changed origin/${{ github.base_ref || 'main' }}
+
+  hazards:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Committed secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Dependency vulnerabilities
+        run: npm audit --audit-level=high
+      # A second scanner on the same concern: npm audit only knows the npm
+      # advisory database, osv-scanner reads OSV across ecosystems.
+      - name: Dependency vulnerabilities (osv-scanner)
+        uses: google/osv-scanner-action/osv-scanner-action@v2.0.2
+        with:
+          scan-args: |-
+            --lockfile=package-lock.json
+      - name: Insecure patterns
+        run: npx --yes semgrep --config auto --error --exclude .software-factory
+      - name: Dead code
+        run: npx --yes knip
+      - name: Performance regression (vitest bench, tinybench under the hood)
+        run: npm run bench
+      # Both halves of this check live upstream — a dependency's prebuilt config
+      # and someone else's Hugging Face repo — so it needs the network and it
+      # needs to re-run even when nothing here changed.
+      - name: Browser model registry
+        run: npm run verify:models
+
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Lint (includes eslint-plugin-security)
+        run: npm run lint
+      - name: Types
+        run: npx tsc --noEmit
+      - name: Tests
+        run: npm test
+      - name: Build
+        run: npm run build

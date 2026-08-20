@@ -1,0 +1,88 @@
+# Which rules this repository enforces, and how its paths map onto the
+# catalog's neutral vocabulary. `sf explain <RULE>` prints the reasoning
+# behind any rule below.
+version: 1
+project:
+  name: nicolasmelo-portfolio
+  languages: [typescript]
+  exclude: []
+
+docs:
+  scan:
+    - "docs/**/*.md"
+    - "*.md"
+
+# A gate activates from the paths a change touches, never from a label
+# or a sentence in a pull request. See L3.GATE_HAS_FRESH_EVIDENCE.
+gates: {}
+
+rules:
+  # L1 — No function exceeds the cyclomatic ceiling
+  L1.COMPLEXITY_CEILING:
+    enabled: true
+  # L1 — Every suppression names a code and a reason
+  L1.NO_BLANKET_SUPPRESSION:
+    enabled: true
+  # L1 — The untyped escape hatch is banned, and the message names the alternative
+  L1.NO_UNTYPED_ESCAPE_HATCH:
+    enabled: true
+  # L0 — Client code never imports the data layer directly (from the interview)
+  L0.CLIENT_NEVER_IMPORTS_THE_DATA_LAYER:
+    enabled: true
+    options:
+      exclude:
+      - app/api/**
+  # L1 — A skipped or expected-to-fail test says why
+  # Disabled deliberately: the catalog ships a python-only query for this rule
+  # and this repository is typescript-only, so enabled it could never fire.
+  # Enabled-and-inert is a rule that lies about its own coverage (L5.NO_INERT_RULE).
+  L1.SKIPPED_TESTS_STATE_A_REASON:
+    enabled: false
+  # L2 — The guardrail's own configuration is hash-locked
+  L2.FACTORY_CONFIG_IS_LOCKED:
+    enabled: true
+  # L2 — The guardrail may be strengthened, never quietly weakened
+  L2.POLICY_ONLY_TIGHTENS:
+    enabled: true
+  # L2 — Generated artifacts are hash-locked and not hand-edited
+  L2.GENERATED_FILES_ARE_LOCKED:
+    enabled: true
+    options:
+      scope:
+      - package-lock.json
+  # L4 — Repo-relative documentation links resolve
+  L4.DOC_LINKS_RESOLVE:
+    enabled: true
+  # L4 — Every enabled rule is cited in prose, and every citation resolves
+  L4.EVERY_RULE_HAS_A_WHY:
+    enabled: true
+  # L4 — Every plan declares its exit condition and sits in the execution order
+  L4.PLAN_DECLARES_EXIT_CONDITION:
+    enabled: true
+  # L4 — New top-level files are declared before they appear
+  L4.ROOT_FILES_ARE_DECLARED:
+    enabled: true
+  # L5 — Every enabled rule has a mutation that proves it fires
+  L5.EVERY_CHECK_HAS_A_MUTATION_TEST:
+    enabled: true
+  # L5 — An enabled rule must be capable of producing a finding
+  L5.NO_INERT_RULE:
+    enabled: true
+  # L6 — Something detects code nothing reaches
+  L6.DEAD_CODE_IS_DETECTED:
+    enabled: true
+  # L6 — Something audits dependencies for known vulnerabilities
+  L6.DEPENDENCY_VULNERABILITIES_ARE_SCANNED:
+    enabled: true
+  # L6 — Something scans the code for known-insecure patterns
+  L6.INSECURE_PATTERNS_ARE_SCANNED:
+    enabled: true
+  # L6 — Something would notice the code getting slower
+  L6.PERFORMANCE_REGRESSION_IS_GUARDED:
+    enabled: true
+  # L6 — Something checks the browser model registry against its upstreams
+  L6.BROWSER_MODEL_CONFIG_IS_VERIFIED:
+    enabled: true
+  # L6 — Something scans for committed secrets
+  L6.SECRETS_ARE_SCANNED:
+    enabled: true

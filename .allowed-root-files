@@ -1,0 +1,25 @@
+# Files allowed at the repository root. Adding a line here is the
+# deliberate act; NOTES.md appearing without one is the reflex.
+.gitignore
+AGENTS.md
+LICENSE
+README.md
+eslint.config.mjs
+next.config.ts
+package-lock.json
+package.json
+postcss.config.mjs
+tsconfig.json
+.githooks
+.github
+.software-factory
+.allowed-root-files
+app
+components
+content
+docs
+lib
+plans
+public
+vitest.config.mts
+scripts
