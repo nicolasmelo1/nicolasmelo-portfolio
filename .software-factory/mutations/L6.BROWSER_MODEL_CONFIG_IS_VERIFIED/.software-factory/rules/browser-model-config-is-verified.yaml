@@ -1,0 +1,41 @@
+id: L6.BROWSER_MODEL_CONFIG_IS_VERIFIED
+layer: L6
+title: Something checks the browser model registry against its upstreams
+severity: high
+statement: >-
+  A step that verifies the browser model registry against web-llm's
+  prebuiltAppConfig and each model's Hugging Face config runs somewhere the
+  repository actually executes.
+why: >-
+  The default browser model was once chosen on published numbers alone — newer,
+  smaller download, less VRAM than the model it replaced — and it could not
+  start at all. It shipped `sliding_window_size: 512`, web-llm's prebuilt config
+  overrode `context_window_size` to 4096, and the runtime refuses both being
+  positive. Nothing local could see it: one half of the conflict lives in a
+  dependency, the other in someone else's Hugging Face repository, and neither
+  is reachable without a fetch. Types, unit tests and the build were all green
+  while the feature was completely dead, and the page reported only that the
+  model was unavailable. Both upstreams can also change without any commit
+  here, so the numbers recorded in `lib/llm/models.ts` go stale silently. What
+  rots is not the check — it is whether the check is still wired in.
+fix: >-
+  Keep `npm run verify:models` in the CI workflow. It compares every entry in
+  `lib/llm/models.ts` against `prebuiltAppConfig` and against each model's
+  `mlc-chat-config.json`, and fails when a listed model would refuse to
+  initialise, when a recorded window size has drifted, or when the default has
+  no working fallback. If the check itself is wrong, fix the check — do not
+  remove the step.
+ratchet: allowlist
+check:
+  kind: toolchain
+defaults:
+  # Deliberately not `package.json`: the script definition lives there and would
+  # satisfy the rule forever, even with every CI step deleted. Only the place
+  # that actually runs it counts.
+  scope:
+    - ".github/workflows/**"
+    - ".gitlab-ci.yml"
+    - "Makefile"
+    - "justfile"
+  tools:
+    typescript: ["verify:models"]

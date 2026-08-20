@@ -1,0 +1,11 @@
+version: 1
+answers:
+  kind: web-client
+  errors_home: no-convention
+  validation: zod
+  validation_placement: central-module
+  client_data: manual
+  client_state: no-convention
+  client_root: "app, components, lib"
+  data_layer_packages: "app/api/**"
+  generated: "package-lock.json"

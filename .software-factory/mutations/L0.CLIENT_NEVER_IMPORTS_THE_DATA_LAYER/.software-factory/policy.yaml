@@ -1,0 +1,8 @@
+# Generated mutation fixture for L0.CLIENT_NEVER_IMPORTS_THE_DATA_LAYER. It is supposed to fail.
+version: 1
+project:
+  name: mutation
+  languages: [python, typescript, go, rust]
+rules:
+  L0.CLIENT_NEVER_IMPORTS_THE_DATA_LAYER:
+    enabled: true
