@@ -1,7 +1,7 @@
 import type { Spec } from "@json-render/core";
 import type { PortfolioCapsule } from "@/content/portfolio";
 import type { RepoInsight } from "@/lib/sources/github";
-import { applyOps, type Op } from "@/lib/runtime/ops";
+import { applyApplicable, type Op } from "@/lib/runtime/ops";
 import { deltaSchema } from "@/lib/runtime/timeline";
 import { parsePortfolioSpec, ROOT_ID } from "@/lib/ui/spec";
 
@@ -288,19 +288,19 @@ export function validateDeltaAgainstSpec(spec: Spec, input: unknown): ValidatedD
   const delta = parseDelta(input);
   if (!delta) return null;
 
-  let next: Spec;
-  try {
-    next = applyOps(spec, delta.ops).next;
-  } catch {
-    // Not applicable: a node attached before it was registered, a parent that
-    // does not exist. The kernel is right to refuse; the caller must not throw.
-    return null;
+  // An op that cannot apply is dropped rather than taking the transaction with
+  // it. That is only safe because the finished document is checked below: the
+  // guarantee comes from the gate, not from every op being right.
+  const { next, applied, skipped } = applyApplicable(spec, delta.ops);
+  if (!applied.length) return null;
+  if (skipped.length) {
+    console.warn(`[gate] dropped ${skipped.length} inapplicable op(s):`, skipped);
   }
 
   // `parsePortfolioSpec` is the catalog gate and the structural check together.
   if (!parsePortfolioSpec(next)) return null;
 
-  return delta;
+  return { label: delta.label, ops: applied };
 }
 
 /**

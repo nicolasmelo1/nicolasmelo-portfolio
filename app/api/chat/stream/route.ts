@@ -1,6 +1,6 @@
 import type { Spec } from "@json-render/core";
 import { retrievePortfolio } from "@/lib/retrieve";
-import { applyOp, opSchema, type Op } from "@/lib/runtime/ops";
+import { applyApplicable, opSchema, type Op } from "@/lib/runtime/ops";
 import { readReposFor } from "@/lib/sources/github";
 import { buildDeltaPrompt } from "@/lib/ui/prompt";
 import { parsePortfolioSpec } from "@/lib/ui/spec";
@@ -110,6 +110,7 @@ export async function POST(request: Request) {
     const decoder = new TextDecoder();
     let mirror = from;
     let applied = 0;
+    let skipped = 0;
     let carry = "";
 
     while (true) {
@@ -129,16 +130,29 @@ export async function POST(request: Request) {
 
         for (const candidate of result.ops) {
           const parsed = opSchema.safeParse(candidate);
-          if (!parsed.success) throw new Error("model emitted an op the schema refuses");
-          // Applied here first: the client never receives an op that would
-          // throw in its kernel.
-          mirror = applyOp(mirror, parsed.data).next;
+          if (!parsed.success) {
+            skipped += 1;
+            continue;
+          }
+
+          // Applied here first, so the client never receives an op that would
+          // throw in its kernel — and an op that cannot apply is dropped rather
+          // than aborting a transaction that is otherwise fine. `unregister` of
+          // the root was the real case.
+          const step = applyApplicable(mirror, [parsed.data]);
+          if (!step.applied.length) {
+            skipped += 1;
+            continue;
+          }
+
+          mirror = step.next;
           applied += 1;
           send({ type: "op", op: parsed.data });
         }
       }
     }
 
+    if (skipped) console.warn("[openrouter stream] dropped inapplicable op(s):", skipped);
     return { mirror, applied };
   }
 

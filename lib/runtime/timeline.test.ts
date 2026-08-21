@@ -1,6 +1,6 @@
 import type { Spec } from "@json-render/core";
 import { describe, expect, it } from "vitest";
-import { applyOp, applyOps, OpError, type Op } from "@/lib/runtime/ops";
+import { applyApplicable, applyOp, applyOps, OpError, type Op } from "@/lib/runtime/ops";
 import {
   back,
   canGoBack,
@@ -94,6 +94,51 @@ describe("applyOp — every op is exactly invertible", () => {
     expect(() => applyOp(base, { kind: "attach", parent: "page", child: "intro" })).toThrow(OpError);
     expect(() => applyOp(base, { kind: "detach", parent: "page", child: "ghost" })).toThrow(OpError);
     expect(() => applyOp(base, { kind: "setRoot", id: "ghost" })).toThrow(OpError);
+  });
+});
+
+describe("applyApplicable — one bad op is not a lost transaction", () => {
+  it("applies what applies and reports what did not", () => {
+    // The reported case: a model emitted `unregister` of the root partway
+    // through an otherwise fine transaction, and the whole answer was lost
+    // after twenty-five seconds of generation.
+    const ops: Op[] = [
+      { kind: "unregister", id: "page" },
+      { kind: "register", id: "card", node: node("Card", { title: "c" }) },
+      { kind: "attach", parent: "page", child: "card" },
+    ];
+
+    const { next, applied, skipped } = applyApplicable(base, ops);
+    expect(skipped).toEqual([{ kind: "unregister", id: "page" }]);
+    expect(applied).toHaveLength(2);
+    expect(next.elements.card).toBeDefined();
+    expect(next.elements.page.children).toContain("card");
+  });
+
+  it("leaves the spec untouched when nothing applies", () => {
+    const { next, applied, skipped } = applyApplicable(base, [
+      { kind: "attach", parent: "ghost", child: "page" },
+      { kind: "unregister", id: "missing" },
+    ]);
+    expect(applied).toEqual([]);
+    expect(skipped).toHaveLength(2);
+    expect(next).toEqual(base);
+  });
+
+  it("applies a clean transaction whole, skipping nothing", () => {
+    const { applied, skipped } = applyApplicable(base, addCard("fine"));
+    expect(applied).toHaveLength(2);
+    expect(skipped).toEqual([]);
+  });
+
+  it("keeps the ops it applied reversible", () => {
+    // Skipping must not break the journal: what survives is still a Δ.
+    const { applied } = applyApplicable(base, [
+      { kind: "unregister", id: "page" },
+      ...addCard("card"),
+    ]);
+    const t = commit(createTimeline(base), delta("mixed", applied));
+    expect(back(t).current).toEqual(base);
   });
 });
 

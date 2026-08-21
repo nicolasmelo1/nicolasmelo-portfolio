@@ -259,6 +259,51 @@ describe("the gate every author passes through", () => {
     }
   });
 
+  it("drops an impossible op and keeps the rest", () => {
+    // Reported: `unregister` of the root. The kernel is right to refuse it, and
+    // losing nineteen good ops with it is the wrong response.
+    const mixed = {
+      label: "replace the view",
+      ops: [
+        { kind: "unregister", id: "canvas" },
+        { kind: "register", id: "p", node: { type: "Panel", props: { title: "T", note: null }, children: [] } },
+        { kind: "attach", parent: "canvas", child: "p" },
+      ],
+    };
+
+    const delta = validateDeltaAgainstSpec(initialSpec, mixed);
+    expect(delta?.ops).toHaveLength(2);
+    expect(delta?.ops.some((op) => op.kind === "unregister")).toBe(false);
+    // And what comes back is applicable, which is the point.
+    expect(applyOps(initialSpec, delta!.ops).next.elements.p).toBeDefined();
+  });
+
+  it("still refuses when nothing survives", () => {
+    expect(
+      validateDeltaAgainstSpec(initialSpec, {
+        label: "all impossible",
+        ops: [
+          { kind: "unregister", id: "canvas" },
+          { kind: "attach", parent: "ghost", child: "canvas" },
+        ],
+      }),
+    ).toBeNull();
+  });
+
+  it("still refuses when the surviving ops leave an unrenderable document", () => {
+    // Tolerance is only safe because the finished document is checked.
+    expect(
+      validateDeltaAgainstSpec(initialSpec, {
+        label: "survives but invalid",
+        ops: [
+          { kind: "unregister", id: "canvas" },
+          { kind: "register", id: "x", node: { type: "NotAComponent", props: {}, children: [] } },
+          { kind: "attach", parent: "canvas", child: "x" },
+        ],
+      }),
+    ).toBeNull();
+  });
+
   it("accepts a well-formed Δ and hands it back", () => {
     const good = {
       label: "one panel",
