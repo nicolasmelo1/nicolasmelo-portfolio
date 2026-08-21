@@ -18,6 +18,11 @@ export type PortfolioCapsule = {
  * Every capsule below is drawn from a source: a repository description, a
  * README, or the LinkedIn profile its owner supplied. Nothing here is inferred
  * Dates, employers, locations and figures are as stated, not reconstructed.
+ *
+ * Order inside a kind is the tie-breaker when several capsules score alike, so
+ * it is not arbitrary. `this-site` sits last among the projects on purpose:
+ * someone asking "what have you built" means Logion and Palmares, not the page
+ * they are already looking at. Its own aliases still find it directly.
  * The model is handed these and told it may not invent any of them, so anything
  * absent from this file simply cannot be said.
  */
@@ -375,6 +380,39 @@ export const portfolioCapsules: PortfolioCapsule[] = [
     period: "May 2021 to August 2021",
     tags: ["programming language", "interpreter", "dsl", "reflow"],
     aliases: ["flow", "programming language", "interpreter", "language i wrote", "dsl"],
+  },
+  {
+    id: "this-site",
+    kind: "project",
+    title: "This site",
+    summary:
+      "The page you are reading. There is no homepage: you ask a question, and a model rebuilds the page to answer it. Every rebuild can be walked back.",
+    details: [
+      "The page is JSON. A model never writes markup. It writes a list of operations, and the program carries them out while writing down how to undo each one, so going back is exact rather than a rebuild.",
+      "It is inspired by Cordis, a paper on composing things that change over time. The half about time is implemented here; the half about space is not, because there is only one source of content so far.",
+      "The model can only name components from a fixed vocabulary, and it may not invent a single fact. Everything it can say comes from one content file.",
+      "The window never scrolls, so fitting an answer is a problem of arrangement rather than of writing less.",
+      "The code is public, including the tests that hold all of the above true.",
+    ],
+    tags: ["json render", "cordis", "next.js", "llm", "undo", "open source"],
+    aliases: [
+      "this site",
+      "this page",
+      "this website",
+      "this portfolio",
+      "how was this built",
+      "how was this made",
+      "source code",
+      "cordis",
+      "json render",
+    ],
+    links: [
+      {
+        label: "Source of this site",
+        href: "https://github.com/nicolasmelo1/nicolasmelo-portfolio",
+      },
+      { label: "Cordis, the paper behind it", href: "https://github.com/cordiverse/paper" },
+    ],
   },
   {
     id: "skills",

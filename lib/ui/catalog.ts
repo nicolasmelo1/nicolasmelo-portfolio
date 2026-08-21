@@ -10,6 +10,13 @@ import { z } from "zod";
  * content is made to fit: an Accordion collapses siblings, Tabs put panels in
  * the same rectangle, a Carousel pages through them. Fitting is a compositional
  * problem, which is why the vocabulary is mostly containers.
+ *
+ * The rest are shapes for one kind of fact each, and they exist because the
+ * answer was worse without them. A comparison of four projects against four
+ * employers used to be two lists side by side, leaving the reader to line the
+ * rows up by eye; that is a Table. Ten dated roles used to be ten `when:` stats
+ * in ten panels; that is a Timeline. A repository's language split used to be
+ * one string reading "TypeScript 98% · Python 2%"; that is a Meter.
  */
 const COMPONENTS = {
     Canvas: {
@@ -98,6 +105,36 @@ const COMPONENTS = {
     Stat: {
       props: z.object({ label: z.string(), value: z.string() }),
       description: "One labelled figure. Group several inside a Row.",
+    },
+    Table: {
+      props: z.object({
+        columns: z.array(z.string()).min(1),
+        rows: z.array(z.array(z.string())),
+        caption: z.string().nullable().default(null),
+      }),
+      description:
+        "A grid of short cells. The one right answer for comparing things: one column per thing, one row per property. Every row must have exactly as many cells as there are columns. Keep cells to a few words; a table is not a place for prose.",
+    },
+    Timeline: {
+      props: z.object({
+        items: z.array(z.object({ when: z.string(), what: z.string() })).min(1),
+      }),
+      description:
+        "Dated entries in the order given, newest first. Use for anything chronological, which is what a work history is. `when` is the date exactly as the context states it, `what` is one short line.",
+    },
+    Meter: {
+      props: z.object({
+        label: z.string(),
+        percent: z.number().min(0).max(100),
+        note: z.string().nullable().default(null),
+      }),
+      description:
+        "One proportion, drawn as a bar. Only for a figure the context actually states as a share, such as a repository's language percentages. Never invent a number to fill one in.",
+    },
+    Separator: {
+      props: z.object({ label: z.string().nullable().default(null) }),
+      description:
+        "A horizontal divider, optionally labelled. Use to group inside one Panel instead of opening a second one.",
     },
     Text: {
       props: z.object({ text: z.string() }),
