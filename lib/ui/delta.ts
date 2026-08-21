@@ -10,8 +10,7 @@ import { parsePortfolioSpec, ROOT_ID } from "@/lib/ui/spec";
 /**
  * Turning intent into ops.
  *
- * Because the viewport never scrolls, a Δ that answers a new question replaces
- * the view rather than appending to it — and replacing means unregistering what
+ * A Δ that answers a new question replaces the view rather than appending to it — and replacing means unregistering what
  * it removed, not merely detaching it. Detaching would leave the old nodes in
  * the element map: invisible, still there, exactly the residue the whole
  * journal exists to avoid. The inverse carries the removed nodes, so replacing

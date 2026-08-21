@@ -68,12 +68,20 @@ The model can propose changes. It cannot change how changes get undone. Keeping
 those two apart is the whole reason a model is allowed to fail in the first
 place.
 
-**The page never scrolls.** The window is fixed. Anything that does not fit is
-not further down, it is simply invisible. So fitting is a puzzle about
-arrangement, and the boxes the model is allowed to use are mostly containers:
-accordions, tabs, carousels and collapsible sections. It is told to reach for
-those instead of writing less. The full list is in `lib/ui/catalog.ts`, and
-nothing outside that list exists.
+**The frame stays put, the answer scrolls.** The question box and the controls
+never move. The area below them is where answers are built, and it scrolls.
+
+It used to clip instead. Nothing past the edge of the window existed, which made
+composition the only way to fit, which was the point. It also made a long answer
+silently incomplete: asked what he had built, the page showed four projects out
+of nine and looked finished. Content that cannot be reached is worse than content
+that needs a scroll.
+
+The boxes the model is allowed to use are still mostly containers: accordions,
+tabs, carousels and collapsible sections. It is still told to put the answer in
+the first screenful and the rest one click away. That is a preference now rather
+than a wall. The full list is in `lib/ui/catalog.ts`, and nothing outside that
+list exists.
 
 The rest of the list is one shape per kind of fact, and each one exists because
 the answer was worse without it:
@@ -93,9 +101,10 @@ GitHub reported. `Separator` has not been seen in the wild yet.
 
 The catalog is deliberately much smaller than a component library. Most of what
 a library like shadcn/ui ships cannot help here: the model writes no event
-handlers, so every input, select and slider has nothing to submit to; the page
-does not scroll, so drawers, sheets and scroll areas have nothing to scroll; and
-the surface is text, so avatars and aspect ratios have nothing to show.
+handlers, so every input, select and slider has nothing to submit to; the answer
+area is the one scrolling region there is, so drawers, sheets and scroll areas
+have nothing left to do; and the surface is text, so avatars and aspect ratios
+have nothing to show.
 
 ## Conversations
 
@@ -141,6 +150,57 @@ would otherwise fail the build for a reason nobody can fix.
 Every conversation test checks the same things on every single turn. The page is
 still valid. No box is left created but not placed. The outer box is never
 replaced. And the turn is still one press of back away from the turn before it.
+
+## Paying once for the same answer
+
+Generation is the only expensive part of this app: 10 to 75 seconds and a
+fraction of a cent per question, every time, including the fifth visitor to
+click the same preset.
+
+So answers are kept. What they are keyed on is the whole point. Keying on the
+question would be wrong, because "put them side by side" after the projects and
+"put them side by side" after the employers are the same words and different
+answers, and the second visitor would be served the first one's page. The key is
+the whole flow that arrives at the answer:
+
+```text
+the question  +  the questions before it  +  the document currently on screen
+```
+
+The document is in there because a transaction is written against it. Its
+operations name boxes that have to exist, so an answer written for one page is
+not a smaller answer on another page, it is a wrong one. With the document in
+the key, a hit is a transaction authored for exactly this state, which is the
+only reason it can be replayed at all.
+
+The practical consequence is that the hits are the openings: the presets, and
+the questions people type first. Follow-ups hit only when someone walked the
+same path from the same state. That is the honest ceiling of the design, and the
+openings are most of the traffic.
+
+Four things it does not do:
+
+- It does not keep an answer the model failed to produce. A fallback answer is
+  free to recompute, and keeping it would serve the failure for six hours.
+- It does not trust itself. Everything it hands back goes through the same gate
+  as a fresh transaction, because a cache is an author like any other.
+- It does not outlive the content. Entries last six hours, matching the
+  repository read, because a kept answer can contain a repository's last-push
+  date and that moves.
+- It does not grow without a bound. Two hundred entries, and reading one moves
+  it to the back of the queue, so a preset asked all day is not evicted by a run
+  of one-off questions.
+
+The cache lives in the server process, which on Vercel means one instance at a
+time and a cold start empties it. Somewhere shared, like Vercel KV, would hold
+more hits; that is a change of infrastructure rather than of code, and it is not
+done here. `x-flow-cache` on the response says `hit` or `miss`.
+
+The streaming route is where this matters. The browser tries it first and only
+falls back to `/api/chat`, so a cache in the other route alone would have been
+paid for and never reached. There is a test for that specifically, because it is
+the kind of mistake that fails silently: both routes look cached, nothing breaks,
+and the bill does not move.
 
 ## Run
 

@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { portfolioCapsules } from "@/content/portfolio";
+import { HISTORY_LIMIT } from "@/lib/conversation";
 import { OUTPUT_RESERVE, REQUESTED_CONTEXT } from "@/lib/llm/models";
-import { retrievePortfolio } from "@/lib/retrieve";
+import { RETRIEVAL_LIMIT, retrievePortfolio } from "@/lib/retrieve";
 import { applyOps } from "@/lib/runtime/ops";
 import { describeVocabulary } from "@/lib/ui/catalog";
 import { deterministicDelta } from "@/lib/ui/delta";
@@ -39,11 +40,15 @@ const insight = {
 /**
  * The largest prompt the app can actually produce.
  *
- * Reachable, not hypothetical. Retrieval is capped at four capsules and the
- * repository reader at two, and a Δ replaces the view rather than appending to
- * it, so the spec stays about one answer wide however long the session runs.
- * An earlier version of this handed in all thirteen capsules and reported a
- * budget failure that no request could ever produce.
+ * Reachable, not hypothetical. Retrieval is capped at `RETRIEVAL_LIMIT` capsules
+ * and the repository reader at two, and a Δ replaces the view rather than
+ * appending to it, so the spec stays about one answer wide however long the
+ * session runs. An earlier version of this handed in all thirteen capsules and
+ * reported a budget failure that no request could ever produce.
+ *
+ * The conversation is in here too, at its own cap of six turns. It is small
+ * next to the capsules, but it is on every request after the first, so leaving
+ * it out would understate the real worst case.
  */
 function worstCasePrompt() {
   const query = "How does logion work?";
@@ -62,9 +67,21 @@ function worstCasePrompt() {
       [broad[0].id]: insight,
       [broad[1].id]: { ...insight, slug: "nicolasmelo1/software-factory" },
     },
+    LONGEST_HISTORY,
+    "refine",
   );
   return prompt.system + prompt.user;
 }
+
+/** `HISTORY_LIMIT` turns, each about as long as a question gets. */
+const LONGEST_HISTORY = [
+  "show me your projects",
+  "put them side by side",
+  "compare those with where you worked",
+  "show me the commit dates",
+  "where have you worked and for how long",
+  "now group everything by tag and make it compact",
+];
 
 describe("the prompt budget", () => {
   it("fits the requested context window with room for the reply", () => {
@@ -76,10 +93,22 @@ describe("the prompt budget", () => {
   });
 
   it("is bounded by the caps the code actually enforces", () => {
-    // The budget above is only meaningful because these hold.
-    expect(retrievePortfolio("What have you built?").length).toBeLessThanOrEqual(4);
-    expect(retrievePortfolio("how does everything work here").length).toBeLessThanOrEqual(4);
-    expect(portfolioCapsules.length).toBeGreaterThan(4);
+    // The budget above is only meaningful because these hold. Asserted against
+    // the constant rather than a literal: raising the cap has to move the
+    // budget, not quietly pass a test that was written for the old one.
+    expect(retrievePortfolio("What have you built?").length).toBeLessThanOrEqual(RETRIEVAL_LIMIT);
+    expect(retrievePortfolio("how does everything work here").length).toBeLessThanOrEqual(
+      RETRIEVAL_LIMIT,
+    );
+    expect(LONGEST_HISTORY).toHaveLength(HISTORY_LIMIT);
+    expect(portfolioCapsules.length).toBeGreaterThan(RETRIEVAL_LIMIT);
+  });
+
+  // The reason the cap exists at all, and the reason it is not smaller.
+  it("includes the capsule that the old cap of four left out", () => {
+    const built = retrievePortfolio("What have you built?").map((capsule) => capsule.id);
+    expect(built.slice(0, 4)).not.toContain("logion");
+    expect(built).toContain("logion");
   });
 
   it("still fits with a generous margin, not just barely", () => {
@@ -133,6 +162,9 @@ describe("buildDeltaPrompt", () => {
     const prompt = buildDeltaPrompt("q", initialSpec, [], {});
     expect(prompt.system).toContain('{"label"');
     expect(prompt.system).toContain('"kind":"register"');
-    expect(prompt.system).toContain("THE PAGE NEVER SCROLLS");
+    // The fitting rules are the half of this prompt that shapes an answer, so
+    // the test names one of them rather than only checking the op format.
+    expect(prompt.system).toContain("the answer area below it scrolls");
+    expect(prompt.system).toContain("Compose anyway");
   });
 });

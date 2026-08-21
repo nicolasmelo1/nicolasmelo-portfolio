@@ -6,10 +6,12 @@ import { z } from "zod";
  * The complete UI vocabulary. The model cannot render anything outside it, and
  * cannot write markup, styles or code — it can only name these components.
  *
- * The viewport is fixed and never scrolls, so the containers here are how
- * content is made to fit: an Accordion collapses siblings, Tabs put panels in
- * the same rectangle, a Carousel pages through them. Fitting is a compositional
- * problem, which is why the vocabulary is mostly containers.
+ * The frame is fixed and the answer area scrolls, so the containers here are no
+ * longer the only way content can be reached. They are still how an answer stays
+ * readable: an Accordion collapses siblings, Tabs put panels in the same
+ * rectangle, a Carousel pages through them. Composition is a preference now
+ * rather than a hard limit, which is why the vocabulary is still mostly
+ * containers.
  *
  * The rest are shapes for one kind of fact each, and they exist because the
  * answer was worse without them. A comparison of four projects against four
@@ -25,7 +27,7 @@ const COMPONENTS = {
       }),
       slots: ["default"],
       description:
-        "Root region. Never scrolls. `columns` splits horizontally, `grid` tiles children, `stack` flows vertically. Prefer columns or grid once there is more than one panel.",
+        "Root region. `columns` splits horizontally, `grid` tiles children, `stack` flows vertically. Prefer columns or grid once there is more than one panel, so the answer reads across rather than only down.",
     },
     Row: {
       props: z.object({ align: z.enum(["start", "center", "between"]).default("start") }),

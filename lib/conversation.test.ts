@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { anchor, classify, HISTORY_LIMIT, resolveTurn, sanitizeHistory } from "@/lib/conversation";
+import { RETRIEVAL_LIMIT } from "@/lib/retrieve";
 
 const ids = (capsules: Array<{ id: string }>) => capsules.map((capsule) => capsule.id);
 
@@ -75,15 +76,18 @@ describe("resolveTurn", () => {
     expect(ids(second.capsules)).not.toContain("exp-reflow");
   });
 
-  it("keeps both sides of a comparison, capped for a viewport that cannot scroll", () => {
+  it("keeps both sides of a comparison, and neither side crowds the other out", () => {
     const { intent, capsules } = resolveTurn("compare those with where you worked", [
       "show me your projects",
     ]);
     expect(intent).toBe("extend");
-    const kinds = new Set(capsules.map((capsule) => capsule.kind));
-    expect(kinds.has("project")).toBe(true);
-    expect(kinds.has("experience")).toBe(true);
-    expect(capsules.length).toBeLessThanOrEqual(4);
+    const kinds = capsules.map((capsule) => capsule.kind);
+    expect(new Set(kinds).size).toBe(2);
+    expect(capsules.length).toBeLessThanOrEqual(RETRIEVAL_LIMIT);
+    // Half the budget each. A comparison where one side brought five capsules
+    // and the other brought one is a list, not a comparison.
+    const projects = kinds.filter((kind) => kind === "project").length;
+    expect(projects).toBe(kinds.length - projects);
   });
 
   it("moves the subject when the visitor changes it, and keeps nothing", () => {

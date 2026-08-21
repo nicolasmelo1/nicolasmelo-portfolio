@@ -46,8 +46,8 @@ export function buildDeltaPrompt(
       ].join("\n"),
 
       [
-        "THE PAGE NEVER SCROLLS. The viewport is fixed and content that does not fit is simply invisible.",
-        "This is the main constraint on your answer. Make it fit by composing containers, not by writing less:",
+        "The frame is fixed and the answer area below it scrolls. Nothing you emit is lost off the edge, so completeness is not what constrains you. Readability is.",
+        "Compose anyway. An answer the visitor has to scroll through is worse than one they can take in, so put what was actually asked in the first screenful and the rest behind containers:",
         "- More than two topics: one Panel holding an Accordion, one AccordionItem per topic, only the first open.",
         "- The same few properties across several things: a Table. One column per thing, one row per property. It fits far more than the same facts written out as prose, and it is the only shape that lets them be read against each other.",
         "- Anything dated, and a work history above all: a Timeline, newest first. Ten roles as ten Panels does not fit and never did.",
@@ -57,7 +57,7 @@ export function buildDeltaPrompt(
         "- Secondary detail: a Collapsible, closed.",
         "- Two groups that belong in one Panel: a Separator between them, rather than a second Panel.",
         "- Two topics of equal weight: patchProps the root to {\"layout\":\"columns\"}.",
-        "Prefer four short panels behind an accordion over one panel that overflows.",
+        "Prefer four short panels behind an accordion over one long panel. Six capsules of context is not six panels of answer: use what answers the question and put the rest one click away.",
       ].join("\n"),
 
       [

@@ -1,5 +1,5 @@
 import type { PortfolioCapsule } from "@/content/portfolio";
-import { namesSomething, normalize, retrievePortfolio } from "@/lib/retrieve";
+import { namesSomething, normalize, RETRIEVAL_LIMIT, retrievePortfolio } from "@/lib/retrieve";
 
 /**
  * What a follow-up is about.
@@ -90,10 +90,9 @@ function unique(capsules: PortfolioCapsule[]) {
 /**
  * Both subjects, interleaved and capped.
  *
- * A comparison of four projects against four employers is eight capsules, and
- * the viewport that never scrolls does not have room for eight. Halving each
- * side keeps the answer a comparison rather than a list that happens to contain
- * both.
+ * A comparison has to stay a comparison. Handing over everything that matched
+ * either side produces a list that happens to contain both, so each side gets
+ * half the budget and the answer keeps its shape.
  */
 function widen(carried: PortfolioCapsule[], fresh: PortfolioCapsule[], limit: number) {
   const half = Math.max(1, Math.floor(limit / 2));
@@ -119,7 +118,7 @@ export type Resolved = {
  * which is exactly the old behaviour — so a single-shot question resolves the
  * way it always did.
  */
-export function resolveTurn(query: string, history: string[] = [], limit = 4): Resolved {
+export function resolveTurn(query: string, history: string[] = [], limit = RETRIEVAL_LIMIT): Resolved {
   const fresh = retrievePortfolio(query, limit);
   const previous = anchor(history);
   if (!previous) return { intent: "replace", capsules: fresh, subjectQuery: query };
