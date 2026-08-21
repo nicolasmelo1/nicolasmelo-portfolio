@@ -294,7 +294,7 @@ export function validateDeltaAgainstSpec(spec: Spec, input: unknown): ValidatedD
   const { next, applied, skipped } = applyApplicable(spec, delta.ops);
   if (!applied.length) return null;
   if (skipped.length) {
-    console.warn(`[gate] dropped ${skipped.length} inapplicable op(s):`, skipped);
+    console.warn("[gate] dropped inapplicable op(s):", skipped.length, skipped);
   }
 
   // `parsePortfolioSpec` is the catalog gate and the structural check together.
