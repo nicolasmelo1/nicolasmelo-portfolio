@@ -116,8 +116,9 @@ describe.skipIf(!live)("a real model, across three turns", () => {
         "put them side by side",
       ]);
       if (third.authored) {
-        // The destructive turn. Anything left from the projects is residue in a
-        // viewport that cannot scroll.
+        // The destructive turn. Anything left from the projects is residue: the
+        // visitor changed subject, and scrolling past the old one is not an
+        // answer to the new one.
         expect(
           survival(bodyIds(second.spec), bodyIds(third.spec)),
           "the new question left the old subject on screen",

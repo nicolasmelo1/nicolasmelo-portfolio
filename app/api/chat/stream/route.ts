@@ -1,5 +1,6 @@
 import type { Spec } from "@json-render/core";
 import { resolveTurn, sanitizeHistory } from "@/lib/conversation";
+import { flowKey, readFlow, writeFlow } from "@/lib/llm/cache";
 import { applyApplicable, opSchema, type Op } from "@/lib/runtime/ops";
 import { readReposFor } from "@/lib/sources/github";
 import { buildDeltaPrompt } from "@/lib/ui/prompt";
@@ -32,6 +33,24 @@ type Line =
 
 const encoder = new TextEncoder();
 const encode = (line: Line) => encoder.encode(`${JSON.stringify(line)}\n`);
+
+/**
+ * A kept transaction, in the shape the client already reads.
+ *
+ * Emitted whole and at once rather than paced out. Streaming exists to cover
+ * generation latency and there is none left to cover, so pretending to type it
+ * out would be an animation, not a feature.
+ */
+function replay(label: string, ops: Op[]) {
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encode({ type: "label", label }));
+      for (const op of ops) controller.enqueue(encode({ type: "op", op }));
+      controller.enqueue(encode({ type: "done" }));
+      controller.close();
+    },
+  });
+}
 
 /** `data:` payloads from an SSE body, in order. */
 function sseData(chunk: string): string[] {
@@ -85,6 +104,23 @@ export async function POST(request: Request) {
     return new Response(JSON.stringify({ error: "invalid request" }), { status: 400 });
   }
 
+  const history = sanitizeHistory(body.history);
+
+  // Checked before anything is spent: before the key, before the repository
+  // read, before the prompt is even built. The client tries this route first, so
+  // a cache that only lived in `/api/chat` would almost never be reached.
+  const key = flowKey(query, history, startingSpec);
+  const cached = readFlow(key, startingSpec);
+  if (cached) {
+    return new Response(replay(cached.label, cached.ops), {
+      headers: {
+        "Content-Type": "application/x-ndjson",
+        "Cache-Control": "no-store",
+        "x-flow-cache": "hit",
+      },
+    });
+  }
+
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
     // Answered rather than refused: the client needs to know to stop waiting.
@@ -93,7 +129,6 @@ export async function POST(request: Request) {
     });
   }
 
-  const history = sanitizeHistory(body.history);
   const { intent, capsules } = resolveTurn(query, history);
   const repos = await readReposFor(query, capsules);
   const prompt = buildDeltaPrompt(query, startingSpec, capsules, repos, history, intent);
@@ -108,14 +143,15 @@ export async function POST(request: Request) {
     body: ReadableStream<Uint8Array>,
     from: Spec,
     send: (line: Line) => void,
-  ): Promise<{ mirror: Spec; applied: number }> {
+  ): Promise<{ mirror: Spec; sent: Op[]; label: string | null }> {
     const scanner = createOpScanner();
     // Decoded by hand rather than through TextDecoderStream: the pipeThrough
     // overload does not line up with the DOM types here, and this is one line.
     const reader = body.getReader();
     const decoder = new TextDecoder();
     let mirror = from;
-    let applied = 0;
+    const sent: Op[] = [];
+    let label: string | null = null;
     let skipped = 0;
     let carry = "";
 
@@ -132,7 +168,10 @@ export async function POST(request: Request) {
 
       for (const payload of sseData(ready)) {
         const result = scanner.push(contentDelta(payload));
-        if (result.label) send({ type: "label", label: result.label });
+        if (result.label) {
+          label = result.label;
+          send({ type: "label", label: result.label });
+        }
 
         for (const candidate of result.ops) {
           const parsed = opSchema.safeParse(candidate);
@@ -152,14 +191,14 @@ export async function POST(request: Request) {
           }
 
           mirror = step.next;
-          applied += 1;
+          sent.push(parsed.data);
           send({ type: "op", op: parsed.data });
         }
       }
     }
 
     if (skipped) console.warn("[openrouter stream] dropped inapplicable op(s):", skipped);
-    return { mirror, applied };
+    return { mirror, sent, label };
   }
 
   const stream = new ReadableStream<Uint8Array>({
@@ -172,14 +211,17 @@ export async function POST(request: Request) {
           throw new Error(`OpenRouter returned ${upstream.status}`);
         }
 
-        const { mirror, applied } = await pump(upstream.body, startingSpec, send);
-        if (!applied) throw new Error("model emitted no operations");
+        const { mirror, sent, label } = await pump(upstream.body, startingSpec, send);
+        if (!sent.length) throw new Error("model emitted no operations");
         // The whole point of a transaction: the finished document has to be one
         // the catalog accepts, not just a sequence that happened to apply.
         if (!parsePortfolioSpec(mirror)) {
           throw new Error("finished document failed the catalog gate");
         }
 
+        // Kept only now, after the finished document passed the gate. Caching a
+        // transaction the gate would refuse would serve the refusal for hours.
+        writeFlow(key, { label: label ?? "answer", ops: sent });
         send({ type: "done" });
       } catch (error) {
         console.warn("[openrouter stream] failed:", MODEL, error);
@@ -194,6 +236,7 @@ export async function POST(request: Request) {
     headers: {
       "Content-Type": "application/x-ndjson",
       "Cache-Control": "no-store",
+      "x-flow-cache": "miss",
     },
   });
 }

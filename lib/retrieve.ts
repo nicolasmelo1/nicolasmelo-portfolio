@@ -147,7 +147,28 @@ function scoreCapsule(
   return score;
 }
 
-export function retrievePortfolio(query: string, limit = 4) {
+/**
+ * How many capsules an answer may be built from.
+ *
+ * It was four, chosen when the workspace was a fixed rectangle that clipped
+ * anything past its edge. That cost more than it saved: "what have you built"
+ * returned four of the nine projects and left Logion out, because the word
+ * "built" happens to appear in four other capsules and not in that one. The
+ * answer looked complete and was not.
+ *
+ * Six, and the number was chosen by the budget check rather than by taste.
+ * Measured against the worst-case prompt as a share of what the browser model
+ * leaves for input: four is 66%, six is 73%, eight is 81% and ten is 83%. The
+ * margin test in `lib/ui/prompt.test.ts` refuses anything above 80%, because
+ * content grows without anyone editing that file. Six is the most this can
+ * afford, and it is enough: it is where Logion comes back.
+ *
+ * The relevance cutoff below is still what drops noise. This only stops the cap
+ * from truncating signal.
+ */
+export const RETRIEVAL_LIMIT = 6;
+
+export function retrievePortfolio(query: string, limit = RETRIEVAL_LIMIT) {
   const normalizedQuery = normalize(query);
 
   // A named subject silences the category. "How does logion work?" is about

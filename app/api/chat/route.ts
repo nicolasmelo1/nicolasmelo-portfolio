@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import type { Spec } from "@json-render/core";
 import { resolveTurn, sanitizeHistory } from "@/lib/conversation";
+import { flowKey, readFlow, writeFlow } from "@/lib/llm/cache";
 import { readReposFor } from "@/lib/sources/github";
 import { checkedDeterministicDelta, validateDeltaAgainstSpec } from "@/lib/ui/delta";
 import { buildDeltaPrompt } from "@/lib/ui/prompt";
@@ -41,6 +42,15 @@ export async function POST(request: Request) {
       delta: checkedDeterministicDelta(currentSpec, query, capsules, repos, intent),
       source: "deterministic",
     });
+
+  // Answered before the model is asked. `source` still says `cloud` because a
+  // model did write this transaction; the header is how a hit can be seen from
+  // outside without putting a fourth author in the interface.
+  const key = flowKey(query, history, currentSpec);
+  const cached = readFlow(key, currentSpec);
+  if (cached) {
+    return NextResponse.json({ delta: cached, source: "cloud" }, { headers: { "x-flow-cache": "hit" } });
+  }
 
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) return fallback();
@@ -83,7 +93,8 @@ export async function POST(request: Request) {
     const delta = validateDeltaAgainstSpec(currentSpec, JSON.parse(json));
     if (!delta) throw new Error("Model returned a transaction the gate refused");
 
-    return NextResponse.json({ delta, source: "cloud" });
+    writeFlow(key, delta);
+    return NextResponse.json({ delta, source: "cloud" }, { headers: { "x-flow-cache": "miss" } });
   } catch (error) {
     // Logged, not swallowed. Every OpenRouter failure used to look identical to
     // "no key configured" from the outside — the response just said

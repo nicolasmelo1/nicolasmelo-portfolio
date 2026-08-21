@@ -391,7 +391,7 @@ export const portfolioCapsules: PortfolioCapsule[] = [
       "The page is JSON. A model never writes markup. It writes a list of operations, and the program carries them out while writing down how to undo each one, so going back is exact rather than a rebuild.",
       "It is inspired by Cordis, a paper on composing things that change over time. The half about time is implemented here; the half about space is not, because there is only one source of content so far.",
       "The model can only name components from a fixed vocabulary, and it may not invent a single fact. Everything it can say comes from one content file.",
-      "The window never scrolls, so fitting an answer is a problem of arrangement rather than of writing less.",
+      "The question box and the controls stay put; the answer below them scrolls. It used to clip instead, which made a long answer silently incomplete.",
       "The code is public, including the tests that hold all of the above true.",
     ],
     tags: ["json render", "cordis", "next.js", "llm", "undo", "open source"],

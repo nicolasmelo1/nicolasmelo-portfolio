@@ -32,13 +32,16 @@ body {
 }
 
 /*
- * The fixed workspace is a desktop constraint, not a universal one.
+ * The frame stays put. The answer scrolls.
  *
- * `overflow: hidden` everywhere made a bad composition into permanently
- * inaccessible information — and on a phone, or at 200% zoom, or with a larger
- * default font, that is most compositions. The incentive to compose is kept
- * where there is room to compose; below that, the page scrolls rather than
- * swallowing the answer.
+ * This used to clip: the workspace was a fixed rectangle and anything past its
+ * edge was invisible rather than further down. That made composition the only
+ * way to fit, which was the point, but it also silently dropped content. An
+ * answer that mentioned four projects out of nine looked complete.
+ *
+ * So the window is still fixed, and the question box and the controls never
+ * move, but the workspace below them scrolls. Composition is still what a good
+ * answer does; it is no longer what a *complete* answer requires.
  */
 @media (min-width: 48rem) and (min-height: 34rem) {
   html,
@@ -99,10 +102,9 @@ a {
 /* ------------------------------------------------------------ structure --- */
 
 .jr-canvas {
-  height: 100%;
-  min-height: 0;
-  /* Below the fixed-workspace breakpoint the workspace scrolls instead. */
-  overflow: auto;
+  min-height: 100%;
+  /* Grows with the answer. The workspace above it is what scrolls. */
+  overflow: visible;
 }
 
 .jr-clip,
@@ -117,13 +119,10 @@ a {
 }
 
 @media (min-width: 48rem) and (min-height: 34rem) {
-  .jr-canvas {
-    overflow: hidden;
-  }
-
+  /* Tabs and Carousel page through their children on purpose, so they still
+     clip. A Panel does not: content past its edge would be unreachable, which
+     is exactly what the scrolling workspace is here to stop. */
   .jr-clip,
-  .jr-panel,
-  .jr-panel-body,
   .jr-tabs,
   .jr-carousel {
     min-height: 0;
@@ -476,6 +475,11 @@ a {
   flex: 1;
   min-height: 0;
   padding-top: 0.75rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  /* The credit and the model status are fixed to the bottom of the viewport, so
+     the last line of an answer needs somewhere to end that is not under them. */
+  padding-bottom: 1.75rem;
 }
 
 .jr-status {

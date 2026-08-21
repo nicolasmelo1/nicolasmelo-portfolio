@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { portfolioCapsules } from "@/content/portfolio";
-import { retrievePortfolio } from "@/lib/retrieve";
+import { RETRIEVAL_LIMIT, retrievePortfolio } from "@/lib/retrieve";
 
 describe("retrievePortfolio", () => {
   it("ranks an alias hit first", () => {
@@ -60,12 +60,18 @@ describe("retrievePortfolio", () => {
     expect(retrievePortfolio("what do you do now")[0].id).toBe("exp-revv");
   });
 
-  it("returns the four most recent roles for an open experience question", () => {
+  it("returns the most recent roles first for an open experience question", () => {
     // Every experience capsule gets the same boost, so ties resolve to file
-    // order — which is reverse-chronological, so the default limit yields the
-    // four most recent rather than four arbitrary ones.
+    // order, which is reverse-chronological. The cap therefore truncates the
+    // oldest roles rather than an arbitrary six of them.
     const ids = retrievePortfolio("walk me through your experience").map((c) => c.id);
-    expect(ids).toEqual(["exp-revv", "exp-seedify", "exp-mindcloud", "exp-launchcode"]);
+    expect(ids.slice(0, 4)).toEqual([
+      "exp-revv",
+      "exp-seedify",
+      "exp-mindcloud",
+      "exp-launchcode",
+    ]);
+    expect(ids).toHaveLength(RETRIEVAL_LIMIT);
   });
 
   it("finds a specific employer by name", () => {
