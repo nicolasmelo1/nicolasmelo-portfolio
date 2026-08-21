@@ -1,5 +1,7 @@
 import type { Spec } from "@json-render/core";
 import type { PortfolioCapsule } from "@/content/portfolio";
+import { COLUMNS, type Intent } from "@/lib/conversation";
+import { normalize } from "@/lib/retrieve";
 import type { RepoInsight } from "@/lib/sources/github";
 import { applyApplicable, type Op } from "@/lib/runtime/ops";
 import { deltaSchema } from "@/lib/runtime/timeline";
@@ -183,6 +185,27 @@ function capsuleBody(
 }
 
 /**
+ * A prefix no id in the document is using yet.
+ *
+ * It used to be the element count alone, which is not monotonic: a turn that
+ * replaces four project panels with four employer panels arrives at the same
+ * count, mints the same `d23-panel`, and registers a *different* node under an
+ * id the document already knows. The transaction still applies — the old node is
+ * unregistered first — but the prompt tells the model "ids must be new" and the
+ * fallback author was quietly exempting itself. A reused id is also the one
+ * thing that makes a replacement look like an edit to the renderer, which is
+ * how a new answer animates as though it were a refinement of the old one.
+ *
+ * Found by `lib/conversation.scenario.test.ts`, on turn four of six.
+ */
+function freshStamp(spec: Spec) {
+  const ids = Object.keys(spec.elements);
+  let n = ids.length;
+  while (ids.some((id) => id.startsWith(`d${n}-`))) n += 1;
+  return `d${n}`;
+}
+
+/**
  * The fallback author. Used when no model is reachable, and as the shape the
  * prompt shows the model — one Panel for a focused answer, an Accordion once
  * there is more than would fit at once.
@@ -194,7 +217,7 @@ export function deterministicDelta(
   insights: Record<string, RepoInsight> = {},
 ): { label: string; ops: Op[] } {
   const ops: Op[] = clearViewOps(spec);
-  const stamp = `d${spec.elements[ROOT_ID] ? Object.keys(spec.elements).length : 0}`;
+  const stamp = freshStamp(spec);
   const collapse = capsules.length > 2;
 
   if (collapse) {
@@ -327,6 +350,28 @@ export function refusalDelta(spec: Spec, reason: string): ValidatedDelta {
 }
 
 /**
+ * A refinement that rearranges what is on screen instead of rebuilding it.
+ *
+ * This author clears the view on every turn — correct for a new question, and
+ * the reason "put them side by side" used to *destroy* the four projects it was
+ * asked to arrange. Columns is the one refinement it can honestly perform
+ * without a model: the layout lives on the root, the root is never replaced, and
+ * every node stays exactly where it was.
+ *
+ * Null for anything else, including a refinement of an empty view — there is
+ * nothing to arrange before the first answer exists.
+ */
+function rearrangement(spec: Spec, query: string, intent: Intent) {
+  if (intent !== "refine") return null;
+  if (!COLUMNS.test(normalize(query))) return null;
+  if (!clearViewOps(spec).length) return null;
+  return {
+    label: "side by side",
+    ops: [{ kind: "patchProps", id: ROOT_ID, props: { layout: "columns" } }] as Op[],
+  };
+}
+
+/**
  * Author deterministically, then pass through the same gate as everyone else.
  *
  * The deterministic author is written here and still not trusted: if it ever
@@ -338,8 +383,10 @@ export function checkedDeterministicDelta(
   query: string,
   capsules: PortfolioCapsule[],
   insights: Record<string, RepoInsight> = {},
+  intent: Intent = "replace",
 ): ValidatedDelta {
-  const proposal = deterministicDelta(spec, query, capsules, insights);
+  const proposal =
+    rearrangement(spec, query, intent) ?? deterministicDelta(spec, query, capsules, insights);
   return (
     validateDeltaAgainstSpec(spec, proposal) ??
     refusalDelta(spec, "The fallback author produced a view that failed validation.")

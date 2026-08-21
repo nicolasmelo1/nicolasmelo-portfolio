@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { retrievePortfolio } from "@/lib/retrieve";
+import { resolveTurn, sanitizeHistory } from "@/lib/conversation";
 import { readReposFor } from "@/lib/sources/github";
 
 /**
@@ -13,13 +13,20 @@ import { readReposFor } from "@/lib/sources/github";
  * context is cheap and belongs here, once, behind a shared cache.
  */
 export async function POST(request: Request) {
-  const body = (await request.json()) as { query?: string };
+  const body = (await request.json()) as { query?: string; history?: unknown };
   const query = body.query?.trim();
 
   if (!query) {
     return NextResponse.json({ error: "invalid request" }, { status: 400 });
   }
 
-  const capsules = retrievePortfolio(query);
-  return NextResponse.json({ capsules, repos: await readReposFor(query, capsules) });
+  // Resolved against the conversation, not the query alone: the browser model
+  // gets the same subject the server would have chosen, or it answers a
+  // follow-up about whatever the isolated words happened to match.
+  const { intent, capsules } = resolveTurn(query, sanitizeHistory(body.history));
+  return NextResponse.json({
+    intent,
+    capsules,
+    repos: await readReposFor(query, capsules),
+  });
 }

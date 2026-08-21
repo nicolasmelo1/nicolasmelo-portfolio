@@ -213,8 +213,13 @@ export async function fetchRepoInsight(slug: string): Promise<RepoInsight | null
 // broadest question there is, it is answered by the capsules alone, and reading
 // two repositories for it costs eight API calls and overflows the viewport.
 // They are project-intent words, not depth words.
+// `dates`, `commits`, `activity` and `pushed` are here because of a follow-up
+// that had no answer: "show me the commit dates" asked for the one fact only
+// the repository carries — `lastPush` — named no project, matched nothing in
+// this pattern, and so read nothing and rendered nothing. The question is
+// answerable; it was the read that never happened.
 const DEPTH =
-  /\b(how|why|deep|deeper|detail|details|structure|architecture|inside|stack|lang|language|languages|code|implement|readme|repo|repository|explain|tell me more|more about)\b/;
+  /\b(how|why|deep|deeper|detail|details|structure|architecture|inside|stack|lang|language|languages|code|implement|readme|repo|repository|explain|tell me more|more about|dates?|commits?|activity|pushed)\b/;
 
 /**
  * Which repositories a question justifies reading, at most two.

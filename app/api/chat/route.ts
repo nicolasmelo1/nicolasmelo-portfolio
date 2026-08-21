@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import type { Spec } from "@json-render/core";
-import { retrievePortfolio } from "@/lib/retrieve";
+import { resolveTurn, sanitizeHistory } from "@/lib/conversation";
 import { readReposFor } from "@/lib/sources/github";
 import { checkedDeterministicDelta, validateDeltaAgainstSpec } from "@/lib/ui/delta";
 import { buildDeltaPrompt } from "@/lib/ui/prompt";
@@ -18,7 +18,7 @@ import { parsePortfolioSpec } from "@/lib/ui/spec";
 const MODEL = process.env.OPENROUTER_MODEL ?? "openrouter/free";
 
 export async function POST(request: Request) {
-  const body = (await request.json()) as { query?: string; spec?: Spec };
+  const body = (await request.json()) as { query?: string; spec?: Spec; history?: unknown };
   const query = body.query?.trim();
   const currentSpec = parsePortfolioSpec(body.spec);
 
@@ -26,15 +26,19 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "invalid request" }, { status: 400 });
   }
 
-  const context = retrievePortfolio(query);
+  // The questions already asked, so a pronoun has something to point at.
+  // Retrieval is pure, which is why the prior *questions* are enough to recover
+  // the prior *subjects* — see `lib/conversation.ts`.
+  const history = sanitizeHistory(body.history);
+  const { intent, capsules } = resolveTurn(query, history);
   // Read the repositories the question justifies, before deciding who authors
   // the Δ — the deterministic author uses them too, so a rate-limited or
   // offline GitHub degrades the answer identically on both paths.
-  const repos = await readReposFor(query, context);
+  const repos = await readReposFor(query, capsules);
 
   const fallback = () =>
     NextResponse.json({
-      delta: checkedDeterministicDelta(currentSpec, query, context, repos),
+      delta: checkedDeterministicDelta(currentSpec, query, capsules, repos, intent),
       source: "deterministic",
     });
 
@@ -42,7 +46,7 @@ export async function POST(request: Request) {
   if (!apiKey) return fallback();
 
   try {
-    const prompt = buildDeltaPrompt(query, currentSpec, context, repos);
+    const prompt = buildDeltaPrompt(query, currentSpec, capsules, repos, history, intent);
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -56,7 +60,12 @@ export async function POST(request: Request) {
           { role: "user", content: prompt.user },
         ],
         temperature: 0.1,
-        max_tokens: 2200,
+        // A four-capsule answer measured 45 to 53 ops, which is more than 2,200
+        // tokens: one sample in nine came back `finish_reason: length`, with the
+        // JSON cut mid-op and nothing the gate could accept. The cap is on output
+        // and the model is billed per token it actually writes, so raising it
+        // costs nothing on the answers that were already fitting.
+        max_tokens: 4096,
         response_format: { type: "json_object" },
       }),
     });

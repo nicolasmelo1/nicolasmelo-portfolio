@@ -64,6 +64,52 @@ else.
 The kernel is the one thing the model cannot touch. It proposes Δ; it does not
 get to edit how Δ are reverted.
 
+## Conversations
+
+A question after the first one is not the same problem as the first one. "Put
+them side by side" has no subject of its own; it borrows one from the answer
+already on screen. Until recently the server was handed the current spec and
+nothing else about the conversation, so the subject had to be recovered from the
+words of the follow-up alone — and `them` is a word that scores. It matched a
+capsule containing "save against them at runtime", so the four projects were
+cleared to make room for an employer.
+
+`lib/conversation.ts` resolves a turn instead of scoring it. Every question is
+one of three things:
+
+| intent | asked as | what it must do |
+| --- | --- | --- |
+| `replace` | "where have you worked?" | build the new subject, and take the old one off the screen |
+| `refine` | "put them side by side", "show me the commit dates" | keep the subject, change how it is presented or how deep it goes |
+| `extend` | "compare those with where you worked" | hold both subjects at once |
+
+Naming a subject settles it: "how does logion work" is a new question even though
+`how` is a depth word. A question that names nothing and asks for a presentation
+or a detail can only be about what is already there.
+
+The server needs no conversation memory for this. `retrievePortfolio` is pure, so
+the previous *questions* are enough to recompute the previous *subjects* — and
+the client already keeps one question per Δ in the journal. It posts them as
+`history`; the resolver walks back to the last turn that chose a subject, which
+is what makes a chain of refinements hold instead of decaying one turn at a
+time. Turns the visitor has stepped back past are not sent, because they are not
+on screen and so are not what a pronoun points at.
+
+Three layers of test, because they answer different questions:
+
+```bash
+npx vitest run lib/conversation.scenario.test.ts             # the pipeline: retrieval, author, kernel
+npx vitest run components/portfolio/multi-turn.test.tsx      # the browser: does it send what the pipeline needs
+RUN_LIVE_MODEL=1 npx vitest run app/api/chat/live-model.test.ts   # a real model: does it obey the intent
+```
+
+The first two run in the gate. The live one is opt-in and stays out of it: it
+needs a key, it costs money, and a model having a bad day would otherwise turn a
+red build into something nobody can act on. Every conversation asserts the same
+structural invariants on every turn — the document passes the catalog gate, no
+node is left registered but unattached, the root is never replaced, and the turn
+is still one `back` away from the one before it.
+
 ## Run
 
 ```bash
@@ -84,11 +130,23 @@ All are optional and the app degrades rather than failing without them.
 
 `openrouter/free` routes to whatever free model is available, which was measured
 at 19–87 seconds per answer, occasionally rate limited, and occasionally
-returning a transaction that does not parse. Paid models of a similar size
-answered in ~11 seconds for $0.00004–$0.0003 per question. The provisional
-answer is on screen either way, so this buys refinement latency, not
-availability. The
-token matters more than it looks on a deployed site: unauthenticated GitHub
+returning a transaction that does not parse. The provisional answer is on screen
+either way, so this buys refinement latency, not availability.
+
+Model choice matters more than the latency figures suggest, because a
+transaction the gate refuses is indistinguishable from no model at all. Fifteen
+samples of the same question, counting how often the gate accepted the result:
+
+| `OPENROUTER_MODEL` | accepted | per answer | how it failed |
+| --- | --- | --- | --- |
+| `mistralai/mistral-nemo` | ~50% | 45–75s | nested nodes inside `children`, one truncated reply, one provider 429 |
+| `anthropic/claude-haiku-4.5` | 3/3 | ~10s | — |
+
+The 12B model also tried to unregister the root on every single accepted answer,
+to change a layout it could have reached with `patchProps`. The kernel drops that
+op, which is why the failure was invisible until it was counted.
+
+The GitHub token matters more than it looks on a deployed site: unauthenticated GitHub
 allows 60 requests an hour *per address*, every visitor shares the server's
 address, and one repository costs four requests — about fifteen reads an hour
 for everyone combined.
@@ -138,6 +196,7 @@ the interview answers that generated the repo-specific rules are in
 sf verify     # prove every enabled rule still fires on its fixture
 sf check      # what is live in this repository right now
 npm test      # unit + component tests (vitest, jsdom)
+              # multi-turn conversations are in here; the live-model layer is opt-in
 npm run bench # the L6 performance guard
 npm run knip  # the L6 dead-code detector
 npm run lint  # includes eslint-plugin-security

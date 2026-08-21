@@ -1,5 +1,5 @@
 import type { Spec } from "@json-render/core";
-import { retrievePortfolio } from "@/lib/retrieve";
+import { resolveTurn, sanitizeHistory } from "@/lib/conversation";
 import { applyApplicable, opSchema, type Op } from "@/lib/runtime/ops";
 import { readReposFor } from "@/lib/sources/github";
 import { buildDeltaPrompt } from "@/lib/ui/prompt";
@@ -64,7 +64,12 @@ async function openRouter(system: string, user: string, apiKey: string, signal: 
         { role: "user", content: user },
       ],
       temperature: 0.1,
-      max_tokens: 2200,
+      // A four-capsule answer measured 45 to 53 ops, which is more than 2,200
+      // tokens: one sample in nine came back `finish_reason: length`, with the
+      // JSON cut mid-op and nothing the gate could accept. The cap is on output
+      // and the model is billed per token it actually writes, so raising it
+      // costs nothing on the answers that were already fitting.
+      max_tokens: 4096,
       stream: true,
     }),
     signal,
@@ -72,7 +77,7 @@ async function openRouter(system: string, user: string, apiKey: string, signal: 
 }
 
 export async function POST(request: Request) {
-  const body = (await request.json()) as { query?: string; spec?: Spec };
+  const body = (await request.json()) as { query?: string; spec?: Spec; history?: unknown };
   const query = body.query?.trim();
   const startingSpec = parsePortfolioSpec(body.spec);
 
@@ -88,9 +93,10 @@ export async function POST(request: Request) {
     });
   }
 
-  const context = retrievePortfolio(query);
-  const repos = await readReposFor(query, context);
-  const prompt = buildDeltaPrompt(query, startingSpec, context, repos);
+  const history = sanitizeHistory(body.history);
+  const { intent, capsules } = resolveTurn(query, history);
+  const repos = await readReposFor(query, capsules);
+  const prompt = buildDeltaPrompt(query, startingSpec, capsules, repos, history, intent);
 
   /**
    * Drain the upstream body, emitting each op that closes.

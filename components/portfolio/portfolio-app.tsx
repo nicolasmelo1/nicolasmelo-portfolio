@@ -14,7 +14,7 @@ import {
   type SkipReason,
 } from "@/lib/llm/browser";
 import { collectStreamedDelta } from "@/lib/llm/stream-client";
-import { retrievePortfolio } from "@/lib/retrieve";
+import { resolveTurn } from "@/lib/conversation";
 import {
   back,
   canGoBack,
@@ -61,6 +61,17 @@ function restore(stored: Stored): Timeline {
   return timeline;
 }
 
+/**
+ * The questions asked before now, oldest first.
+ *
+ * Only the applied ones. After `back`, the Δ ahead of the cursor are not on
+ * screen — so they are not what "them" in the next question refers to, and
+ * including them would resolve a follow-up against a view nobody is looking at.
+ */
+function questionsSoFar(timeline: Timeline) {
+  return timeline.entries.slice(0, timeline.cursor).map((entry) => entry.delta.query);
+}
+
 type Inference = {
   status: "idle" | "running" | "stopped" | "settled";
   query: string | null;
@@ -75,6 +86,8 @@ type Inflight = {
   spec: Timeline["current"];
   /** Where the cursor sat once the provisional Δ was committed. */
   cursor: number;
+  /** The questions asked before this one, as the provisional answer saw them. */
+  history: string[];
   controller: AbortController;
 };
 
@@ -180,7 +193,14 @@ export function PortfolioApp() {
     setQuery("");
 
     const spec = timelineRef.current.current;
-    const provisional = checkedDeterministicDelta(spec, question, retrievePortfolio(question));
+    // Read before committing, so it is the conversation *before* this question.
+    const history = questionsSoFar(timelineRef.current);
+    // The instant answer resolves the same way the server will. Without this it
+    // was the destructive one: "put them side by side" cleared the four projects
+    // it was asked to arrange, and the model's version arrived seconds later to
+    // an empty canvas.
+    const { intent, capsules } = resolveTurn(question, history);
+    const provisional = checkedDeterministicDelta(spec, question, capsules, {}, intent);
     const committed = commitChecked(timelineRef.current, {
       id: `d${timelineRef.current.entries.length + 1}`,
       query: question,
@@ -203,6 +223,7 @@ export function PortfolioApp() {
       question,
       spec,
       cursor: committed.cursor,
+      history,
       controller: new AbortController(),
     };
     setInference({ status: "running", query: question, by: null });
@@ -234,7 +255,7 @@ export function PortfolioApp() {
   async function refine(token: number) {
     const inflight = inflightRef.current;
     if (!inflight) return;
-    const { question, spec, controller } = inflight;
+    const { question, spec, controller, history } = inflight;
 
     const settle = (by: Source) =>
       setInference((current) =>
@@ -244,11 +265,11 @@ export function PortfolioApp() {
     // Streamed first. Generation is 11 to 87 seconds depending on the model,
     // and the ops inside a transaction are independent and ordered, so the
     // interface can assemble itself while the model is still writing.
-    const streamed = await streamFromServer(question, spec, controller.signal, token);
+    const streamed = await streamFromServer(question, spec, history, controller.signal, token);
     if (stale(token)) return;
     if (streamed) return settle("cloud");
 
-    const cloud = await askServer(question, spec, controller.signal);
+    const cloud = await askServer(question, spec, history, controller.signal);
     if (stale(token)) return;
 
     if (cloud) {
@@ -271,7 +292,7 @@ export function PortfolioApp() {
     setInference((current) =>
       current.query === question ? { status: "running", query: question, by: null } : current,
     );
-    const local = await askLocal(question, spec, token);
+    const local = await askLocal(question, spec, history, token);
     if (stale(token)) return;
     if (local && replaceProvisional(local, "local", token)) return settle("local");
 
@@ -288,6 +309,7 @@ export function PortfolioApp() {
   async function streamFromServer(
     question: string,
     spec: Timeline["current"],
+    history: string[],
     signal: AbortSignal,
     token: number,
   ): Promise<boolean> {
@@ -296,7 +318,7 @@ export function PortfolioApp() {
       const response = await fetch("/api/chat/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: question, spec }),
+        body: JSON.stringify({ query: question, spec, history }),
         signal,
       });
       if (!response.ok) return false;
@@ -328,12 +350,17 @@ export function PortfolioApp() {
   }
 
   /** Ask the route. Returns null when it could not be reached, or was cancelled. */
-  async function askServer(question: string, spec: Timeline["current"], signal: AbortSignal) {
+  async function askServer(
+    question: string,
+    spec: Timeline["current"],
+    history: string[],
+    signal: AbortSignal,
+  ) {
     try {
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: question, spec }),
+        body: JSON.stringify({ query: question, spec, history }),
         signal,
       });
       if (!response.ok) throw new Error(`chat endpoint returned ${response.status}`);
@@ -362,7 +389,12 @@ export function PortfolioApp() {
    * Lazy on purpose: downloading 672 MB and compiling shaders on every visit is
    * hard to justify for a model that only answers when the cloud cannot.
    */
-  async function askLocal(question: string, spec: Timeline["current"], token: number) {
+  async function askLocal(
+    question: string,
+    spec: Timeline["current"],
+    history: string[],
+    token: number,
+  ) {
     const skip = autoLoadSkipReason();
     if (skip) {
       // Worth saying only now: the cloud already failed, so this is why there
@@ -381,7 +413,7 @@ export function PortfolioApp() {
         setStatus("");
         setLoaded(activeModel());
       }
-      return await generateDeltaInBrowser(question, spec);
+      return await generateDeltaInBrowser(question, spec, history);
     } catch (error) {
       console.warn("[local model] could not author a Δ", error);
       setPhase("unavailable");
@@ -428,6 +460,8 @@ export function PortfolioApp() {
       question: current.query,
       spec: rolled.current,
       cursor: timelineRef.current.cursor,
+      // Everything before the answer being retried, which is what `rolled` is.
+      history: questionsSoFar(rolled),
       controller: new AbortController(),
     };
     setInference({ status: "running", query: current.query, by: null });

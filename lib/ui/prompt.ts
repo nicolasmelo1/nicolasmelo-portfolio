@@ -1,5 +1,6 @@
 import type { Spec } from "@json-render/core";
 import type { PortfolioCapsule } from "@/content/portfolio";
+import type { Intent } from "@/lib/conversation";
 import { describeVocabulary } from "@/lib/ui/catalog";
 import { ROOT_ID } from "@/lib/ui/spec";
 
@@ -13,6 +14,8 @@ export function buildDeltaPrompt(
   currentSpec: Spec,
   context: PortfolioCapsule[],
   repos: Record<string, unknown> = {},
+  conversation: string[] = [],
+  intent: Intent = "replace",
 ) {
   return {
     system: [
@@ -37,6 +40,9 @@ export function buildDeltaPrompt(
         "- Register a node before attaching it. Attach every node you register, or it will never be seen.",
         "- Ids must be new and descriptive, kebab-case, prefixed by the topic (e.g. `masa-panel`, `masa-links`).",
         "- Order matters: the ops run in sequence, so a parent must exist before its child is attached.",
+        '- `children` is a list of ids, always. Never a nested node: `{"children":[{"type":"Badge"}]}` is invalid. Register the child under its own id, then `attach` it. Props never contain nodes either.',
+        '- Every `register` carries `children`, `[]` when it has none.',
+        `- To change the layout, patchProps \`${ROOT_ID}\`. Unregistering it and registering it again is the one thing that is never allowed, and the op is dropped.`,
       ].join("\n"),
 
       [
@@ -51,10 +57,12 @@ export function buildDeltaPrompt(
       ].join("\n"),
 
       [
-        "Replacing versus extending:",
-        `- A new question replaces the view: unregister the nodes that are *children* of \`${ROOT_ID}\`, never \`${ROOT_ID}\` itself, then build the answer.`,
-        "- A refinement of what is on screen ('make it compact', 'group by tag') edits it instead: patchProps, attach, detach, and unregister only what the refinement removes.",
-        "- Never leave a node registered but unattached.",
+        "`conversation` is the questions already asked, oldest first, and `current_view` is what they built. A pronoun in the query points at the most recent of them — resolve it there, never guess.",
+        "`intent` is which kind of turn this is, decided before you were called. Obey it; it is what keeps the view from either accumulating or being thrown away:",
+        `- "replace" — a new question. Unregister the nodes that are *children* of \`${ROOT_ID}\`, never \`${ROOT_ID}\` itself, then build the answer. Leaving the old subject on screen beside the new one is the failure here.`,
+        "- \"refine\" — an adjustment to what is already there ('side by side', 'make it compact', 'group by tag'). Edit it: patchProps, attach, detach, and unregister only what the adjustment removes. Rebuilding from scratch is the failure here, because the visitor asked you to move what they are looking at, not to fetch it again.",
+        "- \"extend\" — a comparison that needs the old subject and a new one at once. Keep what answers it, remove what does not, and put the two sides where they can be read against each other: Tabs, or `columns` on the root.",
+        "- Never leave a node registered but unattached, whichever it is.",
       ].join("\n"),
 
       "Never invent employers, dates, metrics, technologies, links or claims. Use only what the payload contains. If it does not answer the question, say so with an Alert.",
@@ -73,6 +81,8 @@ export function buildDeltaPrompt(
     user: JSON.stringify(
       {
         query,
+        intent,
+        conversation,
         current_view: currentSpec,
         portfolio_context: context,
         repos,

@@ -3,7 +3,7 @@
 import type { Spec } from "@json-render/core";
 import { DEFAULT_MODEL, FALLBACK_MODEL, REQUESTED_CONTEXT } from "@/lib/llm/models";
 import type { PortfolioCapsule } from "@/content/portfolio";
-import { retrievePortfolio } from "@/lib/retrieve";
+import { resolveTurn, type Intent } from "@/lib/conversation";
 import { validateDeltaAgainstSpec } from "@/lib/ui/delta";
 import { extractJsonObject } from "@/lib/ui/stream";
 import { buildDeltaPrompt } from "@/lib/ui/prompt";
@@ -232,30 +232,38 @@ export function localModelStarted() {
  * it fails, retrieval still works locally — only the repository depth is lost,
  * which is the right thing to lose when the network is the thing that broke.
  */
-async function fetchContext(query: string) {
+async function fetchContext(query: string, history: string[]) {
   try {
     const response = await fetch("/api/context", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query }),
+      body: JSON.stringify({ query, history }),
     });
     if (!response.ok) throw new Error(`context endpoint returned ${response.status}`);
     const payload = (await response.json()) as {
+      intent?: Intent;
       capsules?: PortfolioCapsule[];
       repos?: Record<string, unknown>;
     };
     if (!payload.capsules?.length) throw new Error("context endpoint returned nothing");
-    return { capsules: payload.capsules, repos: payload.repos ?? {} };
+    return {
+      intent: payload.intent ?? "replace",
+      capsules: payload.capsules,
+      repos: payload.repos ?? {},
+    };
   } catch {
-    return { capsules: retrievePortfolio(query), repos: {} };
+    // Resolved the same way here, so losing the network costs the repository
+    // depth and not the referent — a follow-up still knows what it is about.
+    const resolved = resolveTurn(query, history);
+    return { intent: resolved.intent, capsules: resolved.capsules, repos: {} };
   }
 }
 
 /** Ask the local model for one Δ. Returns null if it produced anything invalid. */
-export async function generateDeltaInBrowser(query: string, currentSpec: Spec) {
+export async function generateDeltaInBrowser(query: string, currentSpec: Spec, history: string[] = []) {
   const engine = await startLocalModel();
-  const { capsules, repos } = await fetchContext(query);
-  const prompt = buildDeltaPrompt(query, currentSpec, capsules, repos);
+  const { intent, capsules, repos } = await fetchContext(query, history);
+  const prompt = buildDeltaPrompt(query, currentSpec, capsules, repos, history, intent);
   const result = await engine.chat.completions.create(buildChatRequest(prompt));
 
   const content = result.choices[0]?.message?.content;
