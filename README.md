@@ -147,6 +147,25 @@ npm run lint  # includes eslint-plugin-security
 because a check that quietly stopped firing makes the run after it meaningless.
 Enable the hook once with `git config core.hooksPath .githooks`.
 
+## Deploy
+
+Production is deployed by the same workflow that checks it — the `deploy` job in
+`.github/workflows/software-factory.yml`, which `needs` all three check jobs and
+runs only on a push to `main`. Vercel's own git integration is disconnected on
+purpose: it deploys the moment a commit lands, which is before anything here has
+had a chance to fail.
+
+The build happens on the runner and `vercel deploy --prebuilt` uploads
+`.vercel/output` alone, so the source never leaves the runner and nothing is
+built twice. Three repository secrets are needed — `VERCEL_TOKEN`,
+`VERCEL_ORG_ID`, `VERCEL_PROJECT_ID` — and they are read from the environment
+rather than passed as `--token`, which would put the token in the runner's
+process list.
+
+The application's own variables (`OPENROUTER_API_KEY`, `GITHUB_TOKEN`) belong to
+the Vercel project, not to this repository's secrets: the running site is what
+needs them, and `vercel pull` brings them down at build time.
+
 ## Content
 
 Portfolio data lives in `content/portfolio.ts`. The current seed uses public GitHub projects and is intentionally small; CV/work-history capsules can be added without changing the renderer.
