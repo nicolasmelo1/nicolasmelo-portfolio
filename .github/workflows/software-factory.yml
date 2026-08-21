@@ -91,3 +91,56 @@ jobs:
         run: npm test
       - name: Build
         run: npm run build
+
+  # Deploying from here rather than from Vercel's git integration, which is
+  # disconnected on purpose: it deploys every push the moment it lands, before
+  # anything above has had a chance to fail. `needs` is the whole point — a
+  # commit reaches production only after sf check, the scanners and the build
+  # have all passed on that exact commit.
+  deploy:
+    needs: [factory, hazards, checks]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # Two pushes landing close together would otherwise race to alias the
+    # production domain, and the loser is whichever finishes last, not whichever
+    # is newer. Serialised instead, and not cancelled: a half-uploaded
+    # deployment is worse than a slightly stale one.
+    concurrency:
+      group: vercel-production
+      cancel-in-progress: false
+    environment:
+      name: production
+      url: ${{ steps.deploy.outputs.url }}
+    env:
+      # The CLI reads all three from the environment. Passing the token as
+      # `--token=${{ }}` instead — which is what Vercel's own example does —
+      # puts it in the runner's process list and in any command echo, so it is
+      # passed this way for the same reason BASE_REF is above.
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+      # Pinned for the same reason the actions above are pinned by digest: a
+      # deploy that changes because someone else published is not a deploy of
+      # this commit.
+      - name: Install Vercel CLI
+        run: npm install --global vercel@59.3.0
+      - run: npm ci
+      # Pulls the project settings and the production environment variables —
+      # OPENROUTER_API_KEY and GITHUB_TOKEN live in the Vercel project, not in
+      # this repository's secrets, because the running site is what needs them.
+      - name: Pull the project settings
+        run: vercel pull --yes --environment=production
+      # Built here, not on Vercel: `deploy --prebuilt` then uploads
+      # `.vercel/output` only, so the source never leaves the runner and the
+      # build is not paid for twice.
+      - name: Build
+        run: vercel build --prod
+      - name: Deploy
+        id: deploy
+        run: echo "url=$(vercel deploy --prebuilt --prod)" >> "$GITHUB_OUTPUT"
