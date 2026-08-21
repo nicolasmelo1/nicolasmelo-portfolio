@@ -556,6 +556,7 @@ export function PortfolioApp() {
           <p className="jr-note">
             every answer rewrites this page. every change can be walked back.
           </p>
+          <SiteCredit />
           {canGoForward(timeline) ? <div className="jr-presets">{history}</div> : null}
         </div>
         <ModelStatus phase={phase} status={status} skipped={skipped} loaded={loaded} />
@@ -601,8 +602,42 @@ export function PortfolioApp() {
         </JSONUIProvider>
       </div>
 
+      <SiteCredit />
       <ModelStatus phase={phase} status={status} skipped={skipped} loaded={loaded} />
     </main>
+  );
+}
+
+/**
+ * Where this page came from.
+ *
+ * The site answers questions about Nicolas, and the question a developer is
+ * most likely to have about it is not one of those: how it works, and where the
+ * code is. Asking works, because `content/portfolio.ts` carries a capsule for
+ * this repository. This is the version for people who would rather click, and it
+ * is chrome rather than content, so no model can remove it.
+ */
+function SiteCredit() {
+  return (
+    <p className="jr-credit">
+      <a
+        href="https://github.com/nicolasmelo1/nicolasmelo-portfolio"
+        target="_blank"
+        rel="noreferrer"
+        className="jr-key"
+      >
+        [ source ]
+      </a>{" "}
+      <span className="jr-faint">inspired by</span>{" "}
+      <a
+        href="https://github.com/cordiverse/paper"
+        target="_blank"
+        rel="noreferrer"
+        className="jr-link"
+      >
+        Cordis
+      </a>
+    </p>
   );
 }
 

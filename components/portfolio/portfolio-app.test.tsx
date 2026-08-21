@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PortfolioApp } from "@/components/portfolio/portfolio-app";
 import { portfolioCapsules } from "@/content/portfolio";
+import { resolveTurn } from "@/lib/conversation";
 import { retrievePortfolio } from "@/lib/retrieve";
 import { deterministicDelta } from "@/lib/ui/delta";
 import { initialSpec } from "@/lib/ui/spec";
@@ -276,5 +277,40 @@ describe("the journal survives a reload", () => {
     await waitFor(() =>
       expect(screen.getByRole("heading", { name: "What do you want to know?" })).toBeDefined(),
     );
+  });
+});
+
+/**
+ * The credit is chrome, not content.
+ *
+ * A visitor's most likely question about this page is not one the content file
+ * is about: where is the code. Asking works, because there is a capsule for it,
+ * but the link is in the frame as well, outside the workspace, so no transaction
+ * can remove it.
+ */
+describe("where the code is", () => {
+  const SOURCE = "https://github.com/nicolasmelo1/nicolasmelo-portfolio";
+
+  it("is linked before anything has been asked", () => {
+    render(<PortfolioApp />);
+    expect(screen.getByRole("link", { name: /source/ }).getAttribute("href")).toBe(SOURCE);
+    expect(screen.getByRole("link", { name: "Cordis" }).getAttribute("href")).toBe(
+      "https://github.com/cordiverse/paper",
+    );
+  });
+
+  it("is still linked once the page has been rewritten by an answer", async () => {
+    vi.stubGlobal("fetch", serverReturning("d1 / logion", "what is logion"));
+    render(<PortfolioApp />);
+    await ask("what is logion");
+    await waitFor(() => expect(screen.getByText(logion.summary)).toBeDefined());
+    expect(screen.getByRole("link", { name: /source/ }).getAttribute("href")).toBe(SOURCE);
+  });
+
+  it("is answerable too, from the content file rather than from the frame", () => {
+    const { capsules } = resolveTurn("how was this built");
+    expect(capsules.map((capsule) => capsule.id)).toContain("this-site");
+    const site = capsules.find((capsule) => capsule.id === "this-site")!;
+    expect(site.links?.map((link) => link.href)).toContain(SOURCE);
   });
 });

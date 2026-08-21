@@ -75,6 +75,28 @@ accordions, tabs, carousels and collapsible sections. It is told to reach for
 those instead of writing less. The full list is in `lib/ui/catalog.ts`, and
 nothing outside that list exists.
 
+The rest of the list is one shape per kind of fact, and each one exists because
+the answer was worse without it:
+
+| shape | for | what it replaced |
+| --- | --- | --- |
+| `Table` | the same few properties across several things | two lists side by side, leaving the reader to line the rows up by eye |
+| `Timeline` | anything dated, a work history above all | ten roles as ten panels, which never fitted |
+| `Meter` | a share the content actually states | one string reading "TypeScript 98% · Python 2%" |
+| `Separator` | two groups inside one panel | a second panel |
+
+Adding a shape only helps if the model reaches for it, so that was checked
+rather than assumed. Asked to compare two projects it built a `Table`. Asked to
+walk through the work history it built a `Timeline`. Asked which languages a
+repository is written in it built one `Meter` per language, from the percentages
+GitHub reported. `Separator` has not been seen in the wild yet.
+
+The catalog is deliberately much smaller than a component library. Most of what
+a library like shadcn/ui ships cannot help here: the model writes no event
+handlers, so every input, select and slider has nothing to submit to; the page
+does not scroll, so drawers, sheets and scroll areas have nothing to scroll; and
+the surface is text, so avatars and aspect ratios have nothing to show.
+
 ## Conversations
 
 The second question is a different problem from the first one.

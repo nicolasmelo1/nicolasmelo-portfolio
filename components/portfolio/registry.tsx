@@ -59,6 +59,26 @@ function Caret({ open }: { open: boolean }) {
   );
 }
 
+/** `[####------]`, twenty cells wide, which is the same width for every Meter. */
+const BAR_CELLS = 20;
+
+function bar(percent: number) {
+  const filled = Math.max(0, Math.min(BAR_CELLS, Math.round((percent / 100) * BAR_CELLS)));
+  return `[${"#".repeat(filled)}${"-".repeat(BAR_CELLS - filled)}]`;
+}
+
+/**
+ * A row padded to the header's width.
+ *
+ * A model that emits a short or long row is a nuisance, not a hazard: the gate
+ * exists for things that cannot render, and a table with a missing cell renders
+ * fine once the cell is empty. Refusing the whole transaction over it would
+ * throw away an answer that is otherwise correct.
+ */
+function cells(row: string[], columns: number) {
+  return Array.from({ length: columns }, (_, index) => row[index] ?? "");
+}
+
 function Clip({ children }: { children: ReactNode }) {
   return <div className="jr-clip">{children}</div>;
 }
@@ -288,6 +308,75 @@ export const { registry } = defineRegistry(portfolioCatalog, {
         ))}
       </ul>
     ),
+
+    Table: ({ props }) => (
+      <div className="jr-table-wrap jr-enter">
+        <table className="jr-table">
+          {props.caption ? <caption className="jr-note">{props.caption}</caption> : null}
+          <thead>
+            <tr>
+              {props.columns.map((column, index) => (
+                <th key={`${column}-${index}`} scope="col">
+                  {column}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {props.rows.map((row, rowIndex) => (
+              <tr key={rowIndex}>
+                {cells(row, props.columns.length).map((cell, cellIndex) => (
+                  <td key={cellIndex} className="jr-min">
+                    {cell}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    ),
+
+    Timeline: ({ props }) => (
+      <ol className="jr-timeline jr-enter">
+        {props.items.map((item, index) => (
+          <li key={`${item.when}-${index}`}>
+            <span className="jr-when">{item.when}</span>
+            <span aria-hidden="true" className="jr-spine">
+              |
+            </span>
+            <span className="jr-min">{item.what}</span>
+          </li>
+        ))}
+      </ol>
+    ),
+
+    Meter: ({ props }) => (
+      <p className="jr-meter">
+        <span className="jr-meter-label jr-truncate">{props.label}</span>
+        <span
+          role="meter"
+          aria-label={props.label}
+          aria-valuenow={props.percent}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          className="jr-bar"
+        >
+          {bar(props.percent)}
+        </span>
+        <span className="jr-meter-value">{Math.round(props.percent)}%</span>
+        {props.note ? <span className="jr-dim"> {props.note}</span> : null}
+      </p>
+    ),
+
+    Separator: ({ props }) =>
+      props.label ? (
+        <p aria-hidden="true" className="jr-sep">
+          {`-- ${props.label} ${"-".repeat(Math.max(3, 64 - props.label.length))}`}
+        </p>
+      ) : (
+        <hr className="jr-sep-line" />
+      ),
 
     Link: ({ props }) => (
       <p className="jr-link-line">
