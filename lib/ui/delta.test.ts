@@ -2,7 +2,15 @@ import { describe, expect, it } from "vitest";
 import { portfolioCapsules } from "@/content/portfolio";
 import { applyOps } from "@/lib/runtime/ops";
 import { back, commit, createTimeline } from "@/lib/runtime/timeline";
-import { clearViewOps, deterministicDelta, parseDelta, subtreeRemovalOps } from "@/lib/ui/delta";
+import {
+  checkedDeterministicDelta,
+  clearViewOps,
+  deterministicDelta,
+  parseDelta,
+  refusalDelta,
+  subtreeRemovalOps,
+  validateDeltaAgainstSpec,
+} from "@/lib/ui/delta";
 import { initialSpec, parsePortfolioSpec, ROOT_ID } from "@/lib/ui/spec";
 import { retrievePortfolio } from "@/lib/retrieve";
 
@@ -198,6 +206,111 @@ describe("subtreeRemovalOps", () => {
 
   it("ignores ids that are not there", () => {
     expect(subtreeRemovalOps(initialSpec, ["ghost"])).toEqual([]);
+  });
+});
+
+describe("the gate every author passes through", () => {
+  const invented = {
+    label: "invented component",
+    ops: [
+      {
+        kind: "register",
+        id: "x",
+        node: { type: "WhateverTheModelInvented", props: {}, children: [] },
+      },
+      { kind: "attach", parent: "canvas", child: "x" },
+    ],
+  };
+
+  it("is what catches an invented component type — parseDelta alone does not", () => {
+    // The kernel types a node as `type: z.string().min(1)` on purpose: it knows
+    // nothing about components. So the schema accepts this, and only the catalog
+    // gate can refuse it. A local model going through parseDelta alone would
+    // have rendered nothing and taken the page with it.
+    expect(parseDelta(invented)).not.toBeNull();
+    expect(validateDeltaAgainstSpec(initialSpec, invented)).toBeNull();
+  });
+
+  it("refuses a Δ that attaches a node it never registered", () => {
+    // The reported crash, verbatim.
+    expect(
+      validateDeltaAgainstSpec(initialSpec, {
+        label: "orphan attach",
+        ops: [{ kind: "attach", parent: "canvas", child: "d1-palmares-summary" }],
+      }),
+    ).toBeNull();
+  });
+
+  it("refuses props that do not match the component", () => {
+    expect(
+      validateDeltaAgainstSpec(initialSpec, {
+        label: "bad props",
+        ops: [
+          { kind: "register", id: "p", node: { type: "Panel", props: { title: 42 }, children: [] } },
+          { kind: "attach", parent: "canvas", child: "p" },
+        ],
+      }),
+    ).toBeNull();
+  });
+
+  it("refuses anything the schema already rejects", () => {
+    for (const input of [null, {}, { label: "x", ops: [] }, { label: "x", ops: [{ kind: "teleport" }] }]) {
+      expect(validateDeltaAgainstSpec(initialSpec, input)).toBeNull();
+    }
+  });
+
+  it("accepts a well-formed Δ and hands it back", () => {
+    const good = {
+      label: "one panel",
+      ops: [
+        { kind: "register", id: "p", node: { type: "Panel", props: { title: "T", note: null }, children: [] } },
+        { kind: "attach", parent: "canvas", child: "p" },
+      ],
+    };
+    expect(validateDeltaAgainstSpec(initialSpec, good)?.label).toBe("one panel");
+  });
+
+  it("passes the deterministic author's own output", () => {
+    // Written here and still not trusted.
+    const query = "what have you built";
+    const proposal = deterministicDelta(initialSpec, query, retrievePortfolio(query));
+    expect(validateDeltaAgainstSpec(initialSpec, proposal)).not.toBeNull();
+  });
+});
+
+describe("checkedDeterministicDelta", () => {
+  it("returns a renderable Δ for every preset", () => {
+    for (const preset of [
+      "What have you built?",
+      "Where do you work?",
+      "Walk me through your experience",
+      "What do you work with?",
+      "How can I reach you?",
+      "How does logion work?",
+    ]) {
+      const delta = checkedDeterministicDelta(initialSpec, preset, retrievePortfolio(preset));
+      expect(validateDeltaAgainstSpec(initialSpec, delta), preset).not.toBeNull();
+      expect(delta.label, preset).not.toBe("refused");
+    }
+  });
+});
+
+describe("refusalDelta", () => {
+  it("is itself renderable, so the last resort cannot fail", () => {
+    const delta = refusalDelta(initialSpec, "because");
+    expect(validateDeltaAgainstSpec(initialSpec, delta)).not.toBeNull();
+  });
+
+  it("clears whatever was on screen and says why", () => {
+    const query = "what have you built";
+    const built = applyOps(
+      initialSpec,
+      deterministicDelta(initialSpec, query, retrievePortfolio(query)).ops,
+    ).next;
+
+    const next = applyOps(built, refusalDelta(built, "the reason").ops).next;
+    expect(next.elements[ROOT_ID].children).toEqual(["refusal"]);
+    expect(next.elements.refusal.props.body).toBe("the reason");
   });
 });
 

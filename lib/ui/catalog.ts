@@ -123,6 +123,23 @@ const COMPONENTS = {
 export const portfolioCatalog = defineCatalog(schema, { components: COMPONENTS, actions: {} });
 
 /**
+ * Check every element against the component it claims to be.
+ *
+ * `portfolioCatalog.validate` accepts an unknown component type but is lenient
+ * about props: a `Panel` with `title: 42` passed it. Props come from an
+ * untrusted author too, so they are checked here against the same zod schemas
+ * the components are declared with.
+ */
+export function propsMatchComponents(elements: Record<string, { type: string; props?: unknown }>) {
+  for (const element of Object.values(elements)) {
+    const definition = (COMPONENTS as Record<string, { props: z.ZodType } | undefined>)[element.type];
+    if (!definition) return false;
+    if (!definition.props.safeParse(element.props ?? {}).success) return false;
+  }
+  return true;
+}
+
+/**
  * The component vocabulary, compactly.
  *
  * `portfolioCatalog.prompt()` is not this. It is json-render's own protocol
