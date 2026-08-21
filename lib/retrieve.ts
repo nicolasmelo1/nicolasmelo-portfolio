@@ -40,6 +40,14 @@ const STOP_WORDS = new Set([
   "than",
   "that",
   "this",
+  // Pronouns. `them` was the whole bug behind "put them side by side"
+  // retrieving an employer: one capsule reads "save against them at runtime",
+  // so the anaphor scored as content. `lib/conversation.ts` is what resolves
+  // what a pronoun points at; these keep it from *also* scoring as a subject.
+  "them",
+  "they",
+  "these",
+  "those",
   "through",
   "up",
   "us",
@@ -47,7 +55,7 @@ const STOP_WORDS = new Set([
   "we",
 ]);
 
-function normalize(value: string) {
+export function normalize(value: string) {
   return value
     .toLowerCase()
     .normalize("NFD")
@@ -93,7 +101,7 @@ function intentKind(normalizedQuery: string): PortfolioCapsule["kind"] | null {
  * Short aliases are excluded: `rl` would match inside "world", and a two-letter
  * coincidence is not someone naming a subject.
  */
-function namesSomething(normalizedQuery: string) {
+export function namesSomething(normalizedQuery: string) {
   return portfolioCapsules.some((capsule) =>
     capsule.aliases.some((alias) => {
       const normalized = normalize(alias);
