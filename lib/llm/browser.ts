@@ -181,7 +181,7 @@ export function startLocalModel(onProgress?: (message: string) => void): Promise
       try {
         return await initEngine(DEFAULT_MODEL.id, onProgress);
       } catch (error) {
-        console.warn(`[local model] ${DEFAULT_MODEL.id} failed, trying fallback`, error);
+        console.warn("[local model] failed, trying fallback:", DEFAULT_MODEL.id, error);
         onProgress?.(`${DEFAULT_MODEL.label} failed — trying ${FALLBACK_MODEL.label}`);
         return await initEngine(FALLBACK_MODEL.id, onProgress);
       }

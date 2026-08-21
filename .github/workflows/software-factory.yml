@@ -12,7 +12,7 @@ jobs:
   factory:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
       - name: Install sf
@@ -21,20 +21,26 @@ jobs:
       # meaningless, and it is the cheaper failure to discover.
       - name: Prove the checks still fire
         run: sf verify
+      # `github.base_ref` is attacker-controlled on a pull request from a fork,
+      # and `${{ }}` is substituted before the shell sees it — interpolating it
+      # into `run:` is a script injection. Passed through the environment and
+      # quoted instead.
       - name: Check the repository
-        run: sf check --changed origin/${{ github.base_ref || 'main' }}
+        env:
+          BASE_REF: ${{ github.base_ref || 'main' }}
+        run: sf check --changed "origin/$BASE_REF"
 
   hazards:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
       - name: Committed secrets
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
           cache: npm
@@ -44,12 +50,20 @@ jobs:
       # A second scanner on the same concern: npm audit only knows the npm
       # advisory database, osv-scanner reads OSV across ecosystems.
       - name: Dependency vulnerabilities (osv-scanner)
-        uses: google/osv-scanner-action/osv-scanner-action@v2.0.2
+        uses: google/osv-scanner-action/osv-scanner-action@e69cc6c86b31f1e7e23935bbe7031b50e51082de # v2.0.2
         with:
           scan-args: |-
             --lockfile=package-lock.json
+      # semgrep is a Python tool. `npx semgrep` resolved to an unrelated npm
+      # package at version 0.0.1 with no executable, which is why this step only
+      # ever failed in CI. pipx is preinstalled on the runners, and an explicit
+      # public ruleset keeps the scan deterministic where `--config auto` would
+      # depend on the registry.
       - name: Insecure patterns
-        run: npx --yes semgrep --config auto --error --exclude .software-factory
+        run: |
+          pipx install semgrep
+          semgrep scan --config p/default --error --metrics=off \
+            --exclude .software-factory --exclude public
       - name: Dead code
         run: npx --yes knip
       - name: Performance regression (vitest bench, tinybench under the hood)
@@ -63,8 +77,8 @@ jobs:
   checks:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
           cache: npm

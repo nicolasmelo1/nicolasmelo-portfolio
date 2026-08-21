@@ -80,7 +80,7 @@ export async function POST(request: Request) {
     // "no key configured" from the outside — the response just said
     // `deterministic` — which made a broken model id, a refused transaction and
     // a missing env var indistinguishable in the one place they matter.
-    console.warn(`[openrouter] ${MODEL} failed, falling back to the deterministic author:`, error);
+    console.warn("[openrouter] falling back to the deterministic author:", MODEL, error);
     return fallback();
   }
 }

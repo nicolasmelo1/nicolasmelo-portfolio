@@ -162,7 +162,7 @@ export async function POST(request: Request) {
 
         send({ type: "done" });
       } catch (error) {
-        console.warn(`[openrouter stream] ${MODEL} failed:`, error);
+        console.warn("[openrouter stream] failed:", MODEL, error);
         send({ type: "error", reason: error instanceof Error ? error.message : String(error) });
       } finally {
         controller.close();
