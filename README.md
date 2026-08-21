@@ -1,114 +1,124 @@
 # nicolasmelo-portfolio
 
-A text-only interactive portfolio. The page is a persistent `json-render` spec: each question receives the current spec, edits it, and the resulting JSON becomes the new page.
+A portfolio you talk to.
 
-## Architecture
+There is no homepage with sections to scroll through. There is a box where you
+type a question. The page then builds itself to answer that question, and it
+builds itself again when you ask the next one.
 
-The page is not a document that gets rewritten. It is a workspace that gets
-*transformed*, and every transformation carries its own inverse.
+Ask "what have you built" and you get panels about the projects. Say "put them
+side by side" and the same panels move next to each other. Say "where have you
+worked" and the projects go away and the jobs arrive. If you do not like an
+answer, press back and the page returns to exactly what it was.
 
-```text
-                    S₀  (empty — a centred chat)
-                     |
-              user intent
-                     |
-                     v
-        +---------------------------+
-        |  local model (WebWorker)  |  574 MB, auto-loaded in the background
-        |  or /api/chat             |  server route while the weights arrive
-        |  or deterministic         |  no model reachable
-        +-------------+-------------+
-                      |
-                      v
-                  Δ = [op, op, ...]     register / unregister / attach /
-                      |                 detach / patchProps / dropProps / setRoot
-                      v
-        +---------------------------+
-        |  kernel: applyOps         |  returns the next state AND the inverse
-        +-------------+-------------+
-                      |
-              +-------+-------+
-              v               v
-            S₁          journal entry {Δ, inverse}
-```
+## How it works
 
-The model never writes JSX, HTML, CSS or a whole document — it proposes a Δ, a
-list of typed operations over the workspace. The kernel applies it and derives
-the inverse from the state the op was applied to, so `back` runs inverses in
-LIFO order rather than rebuilding anything. That makes going back exact, which
-in turn makes it safe to let a probabilistic author try, fail and retry:
+The page is a piece of JSON. It says which boxes exist, what is inside them, and
+which box holds which. Nothing more.
+
+When you ask something, a model does not write a web page. It writes a short
+list of instructions, like "make a panel called logion-panel", "put this text
+inside it", "put that panel on the screen". We call that list a transaction.
+
+Then the program does two things with the list. It carries the instructions out,
+and it writes down how to undo each one. That second part is what makes back
+work. Going back is not rebuilding the page from scratch. It is running the undo
+notes in reverse order, which lands on the exact same page you had before.
 
 ```text
-S₁ ──Δ compact──> ✗ back ──Δ list──> ✗ back ──Δ dense──> S₂
+                 the empty page (just a question box)
+                              |
+                     you ask something
+                              |
+                              v
+              +-----------------------------+
+              |  a model writes the list:   |
+              |  in the browser, or on the  |
+              |  server, or a plain         |
+              |  fallback if no model can   |
+              |  be reached                 |
+              +--------------+--------------+
+                             |
+                             v
+                  a list of instructions
+                             |
+                             v
+              +-----------------------------+
+              |  the program runs them, and |
+              |  writes down how to undo    |
+              +--------------+--------------+
+                             |
+                +------------+------------+
+                v                         v
+           the new page            the undo notes
 ```
 
-The rejected branches leave nothing behind — not an orphan node, not a stale
-prop. `lib/runtime/timeline.test.ts` checks that against seeded random walks of
-commit/back/forward, asserting after every step that the live state equals a
-fresh replay of the surviving Δ.
+Because undo is exact, the model is allowed to be wrong. It can try, miss, get
+sent back, and try again, and the page carries nothing over from the attempts
+that failed. Not a leftover box, not a leftover setting.
+`lib/runtime/timeline.test.ts` checks this by running long random sequences of
+forward and back moves, comparing the result against a fresh replay every time.
 
-This follows [Cordis](https://github.com/cordiverse/paper), *A Programming
-Paradigm for Spatiotemporal Composability* (Shi, Zhang, Cui). Its temporal
-half — an effect paired with an explicit inverse that the runtime tracks — is
-what is implemented here, in `lib/runtime/`. Its spatial half (coeffects,
-providers, dependency reconciliation) is not: this repository has one static
-content source, so there is nothing for a reconciler to be about yet.
+The idea comes from [Cordis](https://github.com/cordiverse/paper), a paper by
+Shi, Zhang and Cui about composing things that change over time. The half about
+time is what this repository implements, in `lib/runtime/`. The half about space
+is not here, because there is only one source of content so far.
 
-**The page never scrolls.** The viewport is fixed, so a Δ that does not fit is
-invisible rather than reachable. Fitting is therefore a compositional problem,
-and the component vocabulary in `lib/ui/catalog.ts` is mostly containers —
-Accordion, Tabs, Carousel, Collapsible — which the model is told to reach for
-instead of writing less. What it can render is exactly that catalog and nothing
-else.
+The model can propose changes. It cannot change how changes get undone. Keeping
+those two apart is the whole reason a model is allowed to fail in the first
+place.
 
-The kernel is the one thing the model cannot touch. It proposes Δ; it does not
-get to edit how Δ are reverted.
+**The page never scrolls.** The window is fixed. Anything that does not fit is
+not further down, it is simply invisible. So fitting is a puzzle about
+arrangement, and the boxes the model is allowed to use are mostly containers:
+accordions, tabs, carousels and collapsible sections. It is told to reach for
+those instead of writing less. The full list is in `lib/ui/catalog.ts`, and
+nothing outside that list exists.
 
 ## Conversations
 
-A question after the first one is not the same problem as the first one. "Put
-them side by side" has no subject of its own; it borrows one from the answer
-already on screen. Until recently the server was handed the current spec and
-nothing else about the conversation, so the subject had to be recovered from the
-words of the follow-up alone — and `them` is a word that scores. It matched a
-capsule containing "save against them at runtime", so the four projects were
-cleared to make room for an employer.
+The second question is a different problem from the first one.
 
-`lib/conversation.ts` resolves a turn instead of scoring it. Every question is
-one of three things:
+"Put them side by side" has no subject of its own. It borrows one from the answer
+already on the screen. For a while the server only received the words of the
+latest question, so it had to work out the subject from those words alone. That
+went badly. The word "them" scored against a job description that happens to
+contain the phrase "save against them at runtime", so a question about arranging
+four projects fetched an employer instead, and the four projects were wiped to
+make room for it.
 
-| intent | asked as | what it must do |
+Now every question is sorted into one of three kinds before anything is fetched:
+
+| kind | what it sounds like | what it has to do |
 | --- | --- | --- |
-| `replace` | "where have you worked?" | build the new subject, and take the old one off the screen |
-| `refine` | "put them side by side", "show me the commit dates" | keep the subject, change how it is presented or how deep it goes |
+| `replace` | "where have you worked?" | show the new subject, and take the old one off the screen |
+| `refine` | "put them side by side", "show me the commit dates" | keep the subject, change how it looks or how deep it goes |
 | `extend` | "compare those with where you worked" | hold both subjects at once |
 
-Naming a subject settles it: "how does logion work" is a new question even though
-`how` is a depth word. A question that names nothing and asks for a presentation
-or a detail can only be about what is already there.
+Naming a subject settles it. "How does logion work" is a new question, even
+though "how" usually signals a follow-up.
 
-The server needs no conversation memory for this. `retrievePortfolio` is pure, so
-the previous *questions* are enough to recompute the previous *subjects* — and
-the client already keeps one question per Δ in the journal. It posts them as
-`history`; the resolver walks back to the last turn that chose a subject, which
-is what makes a chain of refinements hold instead of decaying one turn at a
-time. Turns the visitor has stepped back past are not sent, because they are not
-on screen and so are not what a pronoun points at.
+The server keeps no memory of the conversation, and does not need any. Looking up
+content is a pure function, so the earlier *questions* are enough to work out the
+earlier *subjects*, and the browser already keeps one question per change. It
+sends the list along. Questions you have stepped back past are not sent, because
+they are not on the screen, so they are not what "them" refers to.
 
-Three layers of test, because they answer different questions:
+Three sets of tests, because they answer different things:
 
 ```bash
-npx vitest run lib/conversation.scenario.test.ts             # the pipeline: retrieval, author, kernel
-npx vitest run components/portfolio/multi-turn.test.tsx      # the browser: does it send what the pipeline needs
-RUN_LIVE_MODEL=1 npx vitest run app/api/chat/live-model.test.ts   # a real model: does it obey the intent
+npx vitest run lib/conversation.scenario.test.ts           # the pipeline: lookup, author, undo
+npx vitest run components/portfolio/multi-turn.test.tsx    # the browser: does it send what the pipeline needs
+RUN_LIVE_MODEL=1 npx vitest run app/api/chat/live-model.test.ts   # a real model: does it obey
 ```
 
-The first two run in the gate. The live one is opt-in and stays out of it: it
-needs a key, it costs money, and a model having a bad day would otherwise turn a
-red build into something nobody can act on. Every conversation asserts the same
-structural invariants on every turn — the document passes the catalog gate, no
-node is left registered but unattached, the root is never replaced, and the turn
-is still one `back` away from the one before it.
+The first two run on every commit. The live one is opt-in and stays out of the
+way, because it needs an API key, it costs money, and a model having a bad day
+would otherwise fail the build for a reason nobody can fix.
+
+Every conversation test checks the same things on every single turn. The page is
+still valid. No box is left created but not placed. The outer box is never
+replaced. And the turn is still one press of back away from the turn before it.
 
 ## Run
 
@@ -117,114 +127,128 @@ npm install
 npm run dev
 ```
 
-Optional environment:
+You can set three things, and all three are optional:
 
 ```bash
-OPENROUTER_API_KEY=...   # lets a cloud model author the Δ instead of the fallback
-OPENROUTER_MODEL=...     # which model; defaults to `openrouter/free`
-GITHUB_TOKEN=...         # raises the repository read from 60 requests/hour to 5,000
-npm run dev
+OPENROUTER_API_KEY=...   # lets a cloud model write the instructions instead of the fallback
+OPENROUTER_MODEL=...     # which model. defaults to `openrouter/free`
+GITHUB_TOKEN=...         # raises the GitHub read from 60 requests an hour to 5,000
 ```
 
-All are optional and the app degrades rather than failing without them.
+Without them the app still works. It just gives simpler answers.
 
-`openrouter/free` routes to whatever free model is available, which was measured
-at 19–87 seconds per answer, occasionally rate limited, and occasionally
-returning a transaction that does not parse. The provisional answer is on screen
-either way, so this buys refinement latency, not availability.
+### Which model
 
-Model choice matters more than the latency figures suggest, because a
-transaction the gate refuses is indistinguishable from no model at all. Fifteen
-samples of the same question, counting how often the gate accepted the result:
+`openrouter/free` picks whatever free model is available. Measured at 19 to 87
+seconds an answer, sometimes rate limited, sometimes returning a list that does
+not parse. A first answer is on screen immediately either way, so the model buys
+a better answer, not a faster one.
+
+Model choice matters more than the speed numbers suggest, because a list the
+program refuses looks exactly the same as no model at all. Fifteen tries at the
+same question, counting how often the result was accepted:
 
 | `OPENROUTER_MODEL` | accepted | per answer | how it failed |
 | --- | --- | --- | --- |
-| `mistralai/mistral-nemo` | ~50% | 45–75s | nested nodes inside `children`, one truncated reply, one provider 429 |
-| `anthropic/claude-haiku-4.5` | 3/3 | ~10s | — |
+| `mistralai/mistral-nemo` | about half | 45 to 75s | boxes nested inside boxes where an id was expected, one reply cut off, one rate limit |
+| `anthropic/claude-haiku-4.5` | 3 of 3 | about 10s | it did not |
 
-The 12B model also tried to unregister the root on every single accepted answer,
-to change a layout it could have reached with `patchProps`. The kernel drops that
-op, which is why the failure was invisible until it was counted.
+The smaller model also tried to delete the outer box on every answer it got
+right, to change a setting it could have changed directly. The program throws
+that instruction away, which is why nobody noticed until it was counted.
 
-The GitHub token matters more than it looks on a deployed site: unauthenticated GitHub
+### Which GitHub token
+
+It matters more than it looks once the site is live. Without a token GitHub
 allows 60 requests an hour *per address*, every visitor shares the server's
-address, and one repository costs four requests — about fifteen reads an hour
-for everyone combined.
+address, and reading one repository costs four requests. That is about fifteen
+repository reads an hour for everyone put together.
 
-The repository read happens on the server, never in the browser. It used to run
-client-side, which spent each visitor's own quota, could not share the cache, and
-printed a 403 into their console for every refused call.
+The reading happens on the server, never in the browser. It used to happen in the
+browser, which spent each visitor's own allowance, could not share what had
+already been fetched, and printed a red error in their console every time GitHub
+said no.
 
-The local model loads itself in a WebWorker as soon as the page opens, so it is
-usually ready before anyone asks anything. It is `Llama-3.2-1B-Instruct` through
-WebLLM — 672 MB to download — with `Qwen3-0.6B` (335 MB) tried once if it fails
-to initialise. The bigger model is the default on purpose: authoring a typed
-transaction is the hard part, and the grammar-constrained decoding that would
-have let a 0.6B model do it reliably is broken in web-llm 0.2.84 (see
-`buildChatRequest`).
+### The model in the browser
 
-Two numbers govern it, both enforced by tests. web-llm forces a 4,096-token
-context window; this app requests 12,288, because the prompt does not fit 4,096
-and every local answer silently failed until it did. And no model is selected
-whose native window is smaller than that, however cheap it is.
+It starts loading as soon as the page opens, so it is usually ready before anyone
+asks anything. It is `Llama-3.2-1B-Instruct` through WebLLM, which is 672 MB to
+download, with `Qwen3-0.6B` (335 MB) tried once if that fails to start.
 
-The worker is pre-bundled by `npm run build:worker` rather than referenced as
-`new Worker(new URL("./worker.ts", …))`: Turbopack did not treat the inline form
-as a worker entry and served the raw TypeScript as `video/mp2t`, which fails
-silently.
+The bigger one is the default on purpose. Writing a correct list of instructions
+is the hard part, and the trick that would let a smaller model do it reliably is
+broken in web-llm 0.2.84. See `buildChatRequest`.
 
-`lib/llm/models.ts` records every candidate with measured numbers *and* both of
-its window sizes, because size and recency turned out to be insufficient — the
-previous default won on every published number and could not start at all.
-`npm run verify:models` re-checks the registry against web-llm and Hugging Face,
-and `L6.BROWSER_MODEL_CONFIG_IS_VERIFIED` fails the build if that check stops
-running.
+Two numbers are pinned by tests. web-llm insists on a 4,096 token window, and
+this app asks for 12,288, because the instructions do not fit in 4,096 and every
+answer failed quietly until it did. And no model is chosen whose own window is
+smaller than that, however cheap it looks.
 
-Auto-loading is guarded: no WebGPU, `saveData` set, or a 2g/3g connection and
-the download never starts. Those visitors get the server route, and the only
-difference they can notice is latency.
+The worker is bundled ahead of time by `npm run build:worker`. Referring to it
+inline instead was worse than it sounds: Turbopack did not recognise it as a
+worker, served the raw TypeScript as a video file, and failed without saying
+anything.
+
+`lib/llm/models.ts` records every candidate model with measured numbers and both
+of its window sizes, because size and release date were not enough to pick by.
+The previous default won on every published number and could not start at all.
+`npm run verify:models` checks that list against web-llm and Hugging Face, and
+the build fails if that check ever stops running.
+
+Loading is skipped when it would be rude: no WebGPU, data saver turned on, or a
+2g or 3g connection. Those visitors get the server instead, and the only
+difference they can notice is that it takes longer.
 
 ## Checks
 
-This repository is governed by [software-factory](https://github.com/nicolasmelo1/software-factory).
-Every rule is enforced by a check and explained in [docs/rules.md](docs/rules.md);
-the interview answers that generated the repo-specific rules are in
-`.software-factory/answers.yaml`, and the decisions they imply are recorded in
+This repository is governed by
+[software-factory](https://github.com/nicolasmelo1/software-factory). Every rule
+is both enforced by a check and explained in plain words in
+[docs/rules.md](docs/rules.md). The answers that generated the repository
+specific rules are in `.software-factory/answers.yaml`, and the decisions they
+imply are written down in
 [docs/architecture-decisions.md](docs/architecture-decisions.md).
 
 ```bash
-sf verify     # prove every enabled rule still fires on its fixture
-sf check      # what is live in this repository right now
-npm test      # unit + component tests (vitest, jsdom)
-              # multi-turn conversations are in here; the live-model layer is opt-in
-npm run bench # the L6 performance guard
-npm run knip  # the L6 dead-code detector
-npm run lint  # includes eslint-plugin-security
+sf verify     # prove every rule still catches the thing it is meant to catch
+sf check      # what is wrong in this repository right now
+npm test      # unit and component tests, including the conversations
+npm run bench # the speed guard
+npm run knip  # finds code nothing reaches
+npm run lint  # includes a security plugin
 ```
 
-`sf verify` runs before `sf check` everywhere — in CI and in `.githooks/pre-commit` —
-because a check that quietly stopped firing makes the run after it meaningless.
-Enable the hook once with `git config core.hooksPath .githooks`.
+`sf verify` always runs before `sf check`, both in CI and in
+`.githooks/pre-commit`, because a check that quietly stopped working makes every
+run after it meaningless. Turn the hook on once with
+`git config core.hooksPath .githooks`.
 
 ## Deploy
 
-Production is deployed by the same workflow that checks it — the `deploy` job in
-`.github/workflows/software-factory.yml`, which `needs` all three check jobs and
-runs only on a push to `main`. Vercel's own git integration is disconnected on
-purpose: it deploys the moment a commit lands, which is before anything here has
-had a chance to fail.
+The same workflow that checks the code also ships it. The `deploy` job in
+`.github/workflows/software-factory.yml` waits for all three check jobs and only
+runs on a push to `main`.
 
-The build happens on the runner and `vercel deploy --prebuilt` uploads
-`.vercel/output` alone, so the source never leaves the runner and nothing is
-built twice. Three repository secrets are needed — `VERCEL_TOKEN`,
-`VERCEL_ORG_ID`, `VERCEL_PROJECT_ID` — and they are read from the environment
-rather than passed as `--token`, which would put the token in the runner's
-process list.
+Vercel's own git integration is switched off on purpose. It deploys the moment a
+commit lands, which is before any check has had a chance to fail.
 
-The application's own variables (`OPENROUTER_API_KEY`, `GITHUB_TOKEN`) belong to
-the Vercel project, not to this repository's secrets: the running site is what
-needs them, and `vercel pull` brings them down at build time.
+The build happens on the GitHub runner, and `vercel deploy --prebuilt` uploads
+only the built output. The source never leaves the runner and nothing is built
+twice. Three repository secrets are needed: `VERCEL_TOKEN`, `VERCEL_ORG_ID` and
+`VERCEL_PROJECT_ID`. They are read from the environment instead of being passed
+on the command line, which would leave the token sitting in the runner's list of
+running processes.
+
+The app's own settings (`OPENROUTER_API_KEY`, `GITHUB_TOKEN`) belong to the
+Vercel project rather than to this repository's secrets, because the running site
+is what needs them. `vercel pull` fetches them at build time.
 
 ## Content
 
-Portfolio data lives in `content/portfolio.ts`. The current seed uses public GitHub projects and is intentionally small; CV/work-history capsules can be added without changing the renderer.
+Everything the site can say about Nicolas lives in `content/portfolio.ts`: the
+jobs, the projects, the studies, the skills and the links.
+
+That file is the only source of facts. The model is handed pieces of it and told
+it may not invent anything, so whatever is missing from that file simply cannot
+be said. Adding a job or a project means editing that one file. The renderer does
+not change.
