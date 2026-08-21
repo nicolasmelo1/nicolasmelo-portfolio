@@ -15,15 +15,19 @@ import { defineRegistry } from "@json-render/react";
 import { portfolioCatalog } from "@/lib/ui/catalog";
 
 /**
- * How the vocabulary looks. Every component here is a real web component —
- * bordered, spaced, focusable — rather than text art, and every container
- * clamps its own height so the page as a whole never grows a scrollbar.
+ * How the vocabulary looks.
+ *
+ * The design system is `+ - | . > < [ ] / _` and monospace. No radii, no
+ * shadows, no gradients, no icon glyphs — a rule is a row of dashes, a
+ * disclosure is `>` or `v`, a button is `[ label ]`. Everything is still a real
+ * component underneath: the accordion collapses, the tabs switch, the carousel
+ * pages. Only the surface is text.
  */
 
 const LAYOUT = {
-  stack: "flex flex-col gap-3",
-  columns: "flex flex-row gap-3 [&>*]:flex-1 [&>*]:min-w-0",
-  grid: "grid grid-cols-2 gap-3 auto-rows-fr",
+  stack: "flex flex-col gap-4",
+  columns: "flex flex-row gap-4 [&>*]:flex-1 [&>*]:min-w-0",
+  grid: "grid grid-cols-1 gap-4 md:grid-cols-2",
 } as const;
 
 const ALIGN = {
@@ -32,20 +36,31 @@ const ALIGN = {
   between: "justify-between",
 } as const;
 
-/** Shared shell for anything that clips its own overflow. */
-function Clip({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <div className={`min-h-0 min-w-0 overflow-hidden ${className}`}>{children}</div>;
+/** `+[ LABEL ]-----------+`, or `+-----+` with no label. */
+function rule(label?: string | null) {
+  const head = label ? `+[ ${label} ]` : "+";
+  return `${head}${"-".repeat(Math.max(3, 72 - head.length))}+`;
 }
 
-function Chevron({ open }: { open: boolean }) {
+function Rule({ label }: { label?: string | null }) {
   return (
-    <span
-      aria-hidden="true"
-      className={`inline-block transition-transform duration-150 ${open ? "rotate-90" : ""}`}
-    >
-      ›
+    <pre aria-hidden="true" className="jr-rule">
+      {rule(label)}
+    </pre>
+  );
+}
+
+/** `>` closed, `v` open. */
+function Caret({ open }: { open: boolean }) {
+  return (
+    <span aria-hidden="true" className="jr-caret">
+      {open ? "v" : ">"}
     </span>
   );
+}
+
+function Clip({ children }: { children: ReactNode }) {
+  return <div className="jr-clip">{children}</div>;
 }
 
 /* ---------------------------------------------------------------- Tabs ----- */
@@ -59,22 +74,20 @@ type TabsRegistry = {
 
 const TabsContext = createContext<TabsRegistry | null>(null);
 
-function TabsRoot({ children }: { children: ReactNode }) {
+function TabsRoot({ children }: { children?: ReactNode }) {
   const [panels, setPanels] = useState<Array<{ id: string; label: string }>>([]);
   const [chosen, setChosen] = useState<string | null>(null);
 
   const register = useCallback((id: string, label: string) => {
-    setPanels((current) =>
-      current.some((p) => p.id === id) ? current : [...current, { id, label }],
-    );
+    setPanels((current) => (current.some((p) => p.id === id) ? current : [...current, { id, label }]));
   }, []);
 
   const unregister = useCallback((id: string) => {
     setPanels((current) => current.filter((p) => p.id !== id));
   }, []);
 
-  // The first panel to register is the default, and if the chosen panel is
-  // removed by a Δ the selection falls back rather than blanking the region.
+  // First to register is the default; if a Δ removes the chosen panel the
+  // selection falls back rather than blanking the region.
   const active = chosen && panels.some((p) => p.id === chosen) ? chosen : panels[0]?.id ?? null;
 
   const value = useMemo<TabsRegistry>(
@@ -84,9 +97,9 @@ function TabsRoot({ children }: { children: ReactNode }) {
 
   return (
     <TabsContext.Provider value={value}>
-      <div className="flex min-h-0 flex-col gap-2">
+      <div className="jr-tabs">
         {panels.length > 1 ? (
-          <div role="tablist" className="flex shrink-0 flex-wrap gap-1">
+          <div role="tablist" className="jr-tablist">
             {panels.map((panel) => (
               <button
                 key={panel.id}
@@ -94,13 +107,9 @@ function TabsRoot({ children }: { children: ReactNode }) {
                 role="tab"
                 aria-selected={panel.id === active}
                 onClick={() => setChosen(panel.id)}
-                className={`rounded-md px-2.5 py-1 text-xs transition-colors ${
-                  panel.id === active
-                    ? "bg-[--surface-3] text-[--fg]"
-                    : "text-[--fg-dim] hover:bg-[--surface-2] hover:text-[--fg]"
-                }`}
+                className="jr-tab"
               >
-                {panel.label}
+                {panel.id === active ? `[*${panel.label}*]` : `[ ${panel.label} ]`}
               </button>
             ))}
           </div>
@@ -123,11 +132,10 @@ function TabPanel({ props, children }: { props: { label: string }; children?: Re
     return () => unregister(id);
   }, [id, props.label, register, unregister]);
 
-  // Without a Tabs parent a panel is still legible on its own.
   if (!tabs) return <Clip>{children}</Clip>;
   if (tabs.active !== id) return null;
   return (
-    <div role="tabpanel" className="min-h-0 overflow-hidden">
+    <div role="tabpanel" className="jr-clip">
       {children}
     </div>
   );
@@ -147,20 +155,20 @@ function CarouselRoot({
   const index = slides.length ? Math.min(at, slides.length - 1) : 0;
 
   return (
-    <div className="flex min-h-0 flex-col gap-2">
-      <div className="flex shrink-0 items-center justify-between gap-2 text-xs text-[--fg-dim]">
-        <span className="truncate">{props.label ?? ""}</span>
-        <span className="flex items-center gap-1">
+    <div className="jr-carousel">
+      <div className="jr-carousel-bar">
+        <span className="jr-truncate">{props.label ?? ""}</span>
+        <span className="jr-pager">
           <button
             type="button"
             aria-label="previous"
             disabled={index === 0}
             onClick={() => setAt(index - 1)}
-            className="rounded px-2 py-0.5 hover:bg-[--surface-2] disabled:opacity-30"
+            className="jr-step"
           >
-            ‹
+            [ &lt; ]
           </button>
-          <span className="tabular-nums">
+          <span>
             {slides.length ? index + 1 : 0}/{slides.length}
           </span>
           <button
@@ -168,9 +176,9 @@ function CarouselRoot({
             aria-label="next"
             disabled={index >= slides.length - 1}
             onClick={() => setAt(index + 1)}
-            className="rounded px-2 py-0.5 hover:bg-[--surface-2] disabled:opacity-30"
+            className="jr-step"
           >
-            ›
+            [ &gt; ]
           </button>
         </span>
       </div>
@@ -184,69 +192,44 @@ function CarouselRoot({
 export const { registry } = defineRegistry(portfolioCatalog, {
   components: {
     Canvas: ({ props, children }) => (
-      <div className={`h-full min-h-0 overflow-hidden ${LAYOUT[props.layout]}`}>{children}</div>
+      <div className={`jr-canvas ${LAYOUT[props.layout]}`}>{children}</div>
     ),
 
-    Row: ({ props, children }) => (
-      <div className={`flex min-w-0 flex-wrap items-start gap-2 ${ALIGN[props.align]}`}>
-        {children}
-      </div>
-    ),
+    Row: ({ props, children }) => <div className={`jr-row ${ALIGN[props.align]}`}>{children}</div>,
 
     Panel: ({ props, children }) => (
-      <section className="jr-enter flex min-h-0 flex-col overflow-hidden rounded-lg border border-[--line] bg-[--surface-1]">
-        <header className="flex shrink-0 items-baseline justify-between gap-3 border-b border-[--line] px-3 py-2">
-          <h2 className="truncate text-sm font-medium text-[--fg]">{props.title}</h2>
-          {props.note ? (
-            <span className="shrink-0 font-mono text-[10px] uppercase tracking-wider text-[--fg-faint]">
-              {props.note}
-            </span>
-          ) : null}
-        </header>
-        <div className="min-h-0 overflow-hidden p-3">{children}</div>
+      <section className="jr-panel jr-enter">
+        <Rule label={props.note ? `${props.note} :: ${props.title}` : props.title} />
+        <h2 className="sr-only">{props.title}</h2>
+        <div className="jr-panel-body">{children}</div>
       </section>
     ),
 
     Card: ({ props, children }) => (
-      <article className="jr-enter flex min-h-0 flex-col gap-2 overflow-hidden rounded-lg border border-[--line] bg-[--surface-2] p-3">
-        <h3 className="text-sm font-medium text-[--fg]">{props.title}</h3>
-        <p className="text-[13px] leading-relaxed text-[--fg-dim]">{props.summary}</p>
-        {props.tags.length ? (
-          <div className="flex flex-wrap gap-1">
-            {props.tags.map((tag) => (
-              <span
-                key={tag}
-                className="rounded border border-[--line] px-1.5 py-0.5 font-mono text-[10px] text-[--fg-faint]"
-              >
-                {tag}
-              </span>
-            ))}
-          </div>
-        ) : null}
+      <article className="jr-card jr-enter">
+        <h3 className="jr-card-title">+ {props.title}</h3>
+        <p className="jr-text">{props.summary}</p>
+        {props.tags.length ? <p className="jr-tags">tags: {props.tags.join(" / ")}</p> : null}
         {children}
       </article>
     ),
 
-    Accordion: ({ children }) => (
-      <div className="jr-enter flex min-h-0 flex-col divide-y divide-[--line] overflow-hidden">
-        {children}
-      </div>
-    ),
+    Accordion: ({ children }) => <div className="jr-accordion jr-enter">{children}</div>,
 
     AccordionItem: ({ props, children }) => {
       const [open, setOpen] = useState(props.open);
       return (
-        <div className="min-h-0">
+        <div className="jr-item">
           <button
             type="button"
             aria-expanded={open}
             onClick={() => setOpen((value) => !value)}
-            className="flex w-full items-center gap-2 py-2 text-left text-sm text-[--fg] hover:text-[--accent]"
+            className="jr-disclose"
           >
-            <Chevron open={open} />
-            <span className="truncate">{props.title}</span>
+            <Caret open={open} />
+            <span className="jr-truncate">{props.title}</span>
           </button>
-          {open ? <div className="min-h-0 overflow-hidden pb-3 pl-4">{children}</div> : null}
+          {open ? <div className="jr-nested">{children}</div> : null}
         </div>
       );
     },
@@ -258,87 +241,71 @@ export const { registry } = defineRegistry(portfolioCatalog, {
     Collapsible: ({ props, children }) => {
       const [open, setOpen] = useState(props.open);
       return (
-        <div className="min-h-0">
+        <div className="jr-item">
           <button
             type="button"
             aria-expanded={open}
             onClick={() => setOpen((value) => !value)}
-            className="flex items-center gap-2 text-xs text-[--fg-dim] hover:text-[--fg]"
+            className="jr-disclose jr-dim"
           >
-            <Chevron open={open} />
+            <Caret open={open} />
             <span>{props.summary}</span>
           </button>
-          {open ? <div className="min-h-0 overflow-hidden pt-2 pl-4">{children}</div> : null}
+          {open ? <div className="jr-nested">{children}</div> : null}
         </div>
       );
     },
 
     Alert: ({ props }) => (
-      <div
-        role="note"
-        className={`jr-enter rounded-md border px-3 py-2 text-[13px] ${
-          props.tone === "warn"
-            ? "border-[--warn-line] bg-[--warn-bg] text-[--warn-fg]"
-            : "border-[--line] bg-[--surface-2] text-[--fg-dim]"
-        }`}
-      >
-        <p className="font-medium text-[--fg]">{props.title}</p>
-        {props.body ? <p className="mt-0.5 leading-relaxed">{props.body}</p> : null}
+      <div role="note" className={`jr-alert jr-enter ${props.tone === "warn" ? "jr-warn" : ""}`}>
+        <p className="jr-alert-title">
+          {props.tone === "warn" ? "!! " : ".. "}
+          {props.title}
+        </p>
+        {props.body ? <p className="jr-text">{props.body}</p> : null}
       </div>
     ),
 
-    Badge: ({ props }) => (
-      <span className="rounded border border-[--line] bg-[--surface-2] px-1.5 py-0.5 font-mono text-[10px] text-[--fg-dim]">
-        {props.label}
+    Badge: ({ props }) => <span className="jr-badge">[{props.label}]</span>,
+
+    Stat: ({ props }) => (
+      <span className="jr-stat">
+        {props.label}: <b>{props.value}</b>
       </span>
     ),
 
-    Stat: ({ props }) => (
-      <div className="rounded-md border border-[--line] bg-[--surface-2] px-3 py-2">
-        <div className="font-mono text-[10px] uppercase tracking-wider text-[--fg-faint]">
-          {props.label}
-        </div>
-        <div className="text-sm text-[--fg]">{props.value}</div>
-      </div>
-    ),
-
-    Text: ({ props }) => (
-      <p className="text-[13px] leading-relaxed text-[--fg-dim]">{props.text}</p>
-    ),
+    Text: ({ props }) => <p className="jr-text">{props.text}</p>,
 
     List: ({ props }) => (
-      <ul className={`text-[13px] text-[--fg-dim] ${props.dense ? "space-y-0.5" : "space-y-1.5"}`}>
+      <ul className={`jr-list ${props.dense ? "jr-dense" : ""}`}>
         {props.items.map((item, index) => (
-          <li key={`${item}-${index}`} className="flex gap-2 leading-relaxed">
-            <span aria-hidden="true" className="select-none text-[--fg-faint]">
-              —
+          <li key={`${item}-${index}`}>
+            <span aria-hidden="true" className="jr-bullet">
+              |--
             </span>
-            <span className="min-w-0">{item}</span>
+            <span className="jr-min">{item}</span>
           </li>
         ))}
       </ul>
     ),
 
     Link: ({ props }) => (
-      <a
-        href={props.href}
-        target="_blank"
-        rel="noreferrer"
-        className="inline-flex items-center gap-1 text-[13px] text-[--accent] underline decoration-[--line] underline-offset-2 hover:decoration-[--accent]"
-      >
-        {props.label}
-        <span aria-hidden="true" className="text-[10px]">
-          ↗
-        </span>
-      </a>
+      <p className="jr-link-line">
+        <span aria-hidden="true" className="jr-bullet">
+          +--&gt;
+        </span>{" "}
+        <a href={props.href} target="_blank" rel="noreferrer" className="jr-link">
+          {props.label}
+        </a>
+      </p>
     ),
 
     Breadcrumb: ({ props }) => (
-      <nav className="flex flex-wrap items-center gap-1 font-mono text-[10px] uppercase tracking-wider text-[--fg-faint]">
+      <nav className="jr-crumbs">
         {props.items.map((item, index) => (
-          <span key={`${item}-${index}`} className="flex items-center gap-1">
-            {index > 0 ? <span aria-hidden="true">/</span> : null}
-            <span>{item}</span>
+          <span key={`${item}-${index}`}>
+            {index > 0 ? " / " : ""}
+            {item}
           </span>
         ))}
       </nav>

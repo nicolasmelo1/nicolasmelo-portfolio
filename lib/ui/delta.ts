@@ -1,9 +1,9 @@
 import type { Spec } from "@json-render/core";
 import type { PortfolioCapsule } from "@/content/portfolio";
 import type { RepoInsight } from "@/lib/sources/github";
-import type { Op } from "@/lib/runtime/ops";
+import { applyApplicable, type Op } from "@/lib/runtime/ops";
 import { deltaSchema } from "@/lib/runtime/timeline";
-import { ROOT_ID } from "@/lib/ui/spec";
+import { parsePortfolioSpec, ROOT_ID } from "@/lib/ui/spec";
 
 /**
  * Turning intent into ops.
@@ -265,6 +265,85 @@ export function deterministicDelta(
   }
 
   return { label: query.slice(0, 48) || "answer", ops };
+}
+
+export type ValidatedDelta = { label: string; ops: Op[] };
+
+/**
+ * The one gate every Δ passes through, whoever wrote it.
+ *
+ *     parse → trial apply → catalog validate → validateSpec → accepted
+ *
+ * No author is trusted; the kernel is trusted. That was only fully true for the
+ * cloud path: the local model went through `parseDelta` alone and straight into
+ * `commit`. `parseDelta` is not enough on its own, because the kernel's op
+ * schema types a node as `type: z.string().min(1)` — deliberately, since the
+ * kernel knows nothing about components — so an invented `WhateverTheModelMade`
+ * satisfies it and only the catalog can say otherwise.
+ *
+ * The catalog gate sits beside the kernel rather than inside it, which is why
+ * this lives here and not in `lib/runtime`.
+ */
+export function validateDeltaAgainstSpec(spec: Spec, input: unknown): ValidatedDelta | null {
+  const delta = parseDelta(input);
+  if (!delta) return null;
+
+  // An op that cannot apply is dropped rather than taking the transaction with
+  // it. That is only safe because the finished document is checked below: the
+  // guarantee comes from the gate, not from every op being right.
+  const { next, applied, skipped } = applyApplicable(spec, delta.ops);
+  if (!applied.length) return null;
+  if (skipped.length) {
+    console.warn("[gate] dropped inapplicable op(s):", skipped.length, skipped);
+  }
+
+  // `parsePortfolioSpec` is the catalog gate and the structural check together.
+  if (!parsePortfolioSpec(next)) return null;
+
+  return { label: delta.label, ops: applied };
+}
+
+/**
+ * The answer of last resort: clear the view and say so.
+ *
+ * Reachable only if the deterministic author itself produces something the gate
+ * refuses, which would be a bug here rather than a bad model. It exists so that
+ * "no author is trusted" has no exception — the fallback for a refused Δ cannot
+ * itself be an unrefusable Δ taken on faith.
+ */
+export function refusalDelta(spec: Spec, reason: string): ValidatedDelta {
+  const ops: Op[] = clearViewOps(spec);
+  ops.push({
+    kind: "register",
+    id: "refusal",
+    node: {
+      type: "Alert",
+      props: { tone: "warn", title: "Could not build that view", body: reason },
+      children: [],
+    },
+  });
+  ops.push({ kind: "attach", parent: ROOT_ID, child: "refusal" });
+  return { label: "refused", ops };
+}
+
+/**
+ * Author deterministically, then pass through the same gate as everyone else.
+ *
+ * The deterministic author is written here and still not trusted: if it ever
+ * emits something unrenderable that is a defect in this file, and the visitor
+ * should see a sentence rather than a crash.
+ */
+export function checkedDeterministicDelta(
+  spec: Spec,
+  query: string,
+  capsules: PortfolioCapsule[],
+  insights: Record<string, RepoInsight> = {},
+): ValidatedDelta {
+  const proposal = deterministicDelta(spec, query, capsules, insights);
+  return (
+    validateDeltaAgainstSpec(spec, proposal) ??
+    refusalDelta(spec, "The fallback author produced a view that failed validation.")
+  );
 }
 
 /** Validate a Δ proposal, whoever wrote it. */

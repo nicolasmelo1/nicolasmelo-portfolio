@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import type { ReactNode } from "react";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -6,7 +7,13 @@ export const metadata: Metadata = {
   description: "An interactive, text-only portfolio that rewrites itself from conversation.",
 };
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+/**
+ * `children` is typed here rather than through Next's generated `LayoutProps`.
+ * That global lives in `.next/types`, so `tsc --noEmit` only passed after a
+ * build — which held locally, where `.next` always existed, and failed in CI
+ * where the typecheck runs first. A typecheck should work on a fresh clone.
+ */
+export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
       {/*

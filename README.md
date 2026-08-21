@@ -75,11 +75,19 @@ Optional environment:
 
 ```bash
 OPENROUTER_API_KEY=...   # lets a cloud model author the Δ instead of the fallback
+OPENROUTER_MODEL=...     # which model; defaults to `openrouter/free`
 GITHUB_TOKEN=...         # raises the repository read from 60 requests/hour to 5,000
 npm run dev
 ```
 
-Both are optional and the app degrades rather than failing without them. The
+All are optional and the app degrades rather than failing without them.
+
+`openrouter/free` routes to whatever free model is available, which was measured
+at 19–87 seconds per answer, occasionally rate limited, and occasionally
+returning a transaction that does not parse. Paid models of a similar size
+answered in ~11 seconds for $0.00004–$0.0003 per question. The provisional
+answer is on screen either way, so this buys refinement latency, not
+availability. The
 token matters more than it looks on a deployed site: unauthenticated GitHub
 allows 60 requests an hour *per address*, every visitor shares the server's
 address, and one repository costs four requests — about fifteen reads an hour

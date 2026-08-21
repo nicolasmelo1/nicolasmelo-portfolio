@@ -53,13 +53,14 @@ describe("the empty state", () => {
     expect(screen.queryByRole("button", { name: /Back to the previous/ })).toBeNull();
   });
 
-  // The status has to say *why* it fell back. It used to read "server model" for
-  // three different causes — no WebGPU, data saver, slow link — plus a failed
-  // worker, which made a real bug indistinguishable from a deliberate skip.
-  it("says why it fell back to the server, not just that it did", async () => {
+  // The status says *why* there was no second chance, and only once the cloud
+  // has already failed — the local model is not loaded speculatively any more.
+  it("says why the local model was not available, once it was needed", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("nope", { status: 500 })));
     render(<PortfolioApp />);
+    await ask("what is logion");
     await waitFor(() =>
-      expect(screen.getByText("server model · this browser has no WebGPU")).toBeDefined(),
+      expect(screen.getByText("[server model] no webgpu")).toBeDefined(),
     );
   });
 
@@ -103,7 +104,7 @@ describe("asking builds an interface", () => {
     // The centred empty state is gone; the composer now sits in a header.
     expect(screen.queryByRole("heading", { name: "What do you want to know?" })).toBeNull();
     expect(screen.getByLabelText("Ask")).toBeDefined();
-    expect(screen.getByText(/Δ1 · logion/)).toBeDefined();
+    expect(screen.getByText(/d1 \/ logion/)).toBeDefined();
   });
 
   it("a preset asks the same way a typed question does", async () => {
@@ -111,21 +112,25 @@ describe("asking builds an interface", () => {
     render(<PortfolioApp />);
     await userEvent.setup().click(screen.getByRole("button", { name: "What have you built?" }));
 
-    await waitFor(() => expect(screen.getByText(/Δ1 · built/)).toBeDefined());
+    await waitFor(() => expect(screen.getByText(/d1 \/ built/)).toBeDefined());
   });
 
-  it("sends the query and the current document to the endpoint", async () => {
+  it("asks the streaming endpoint first, then the plain one", async () => {
     const fetchMock = serverReturning("logion", "what is logion");
     vi.stubGlobal("fetch", fetchMock);
     render(<PortfolioApp />);
     await ask("what is logion");
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
-    const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe("/api/chat");
-    const body = JSON.parse(String(init?.body));
-    expect(body.query).toBe("what is logion");
-    expect(body.spec.root).toBe("canvas");
+    // The stream is tried first because generation is the dominant cost; the
+    // plain endpoint is the fallback when it produces nothing usable.
+    await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2));
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(["/api/chat/stream", "/api/chat"]);
+
+    for (const [, init] of fetchMock.mock.calls) {
+      const body = JSON.parse(String(init?.body));
+      expect(body.query).toBe("what is logion");
+      expect(body.spec.root).toBe("canvas");
+    }
   });
 
   // `offline`, not `deterministic`: the server's deterministic author reads the

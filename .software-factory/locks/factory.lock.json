@@ -3,7 +3,7 @@
   "files": {
     ".allowed-root-files": "1dd07322040334edb5169cf6ca1928371696d004caf269c9ca34b8a4c7e0e2ce",
     ".githooks/pre-commit": "72074487050ecb19ece275b8946bd8c4d343c92dd0cd85fc73b00b6fcd7b55e8",
-    ".github/workflows/software-factory.yml": "ad1be89fe7d561aa151b05c7f361890b5b24b672f19450fcf55693ea6d567de7",
+    ".github/workflows/software-factory.yml": "6f8cbfb324f4e2a49b8b6c9d4eefa82ce5f09e7f0d21cb4066b3ef92f2492726",
     ".software-factory/policy.yaml": "6ea4958bf06ef2da6eca51cf1a3c059bfef180ff0fbb1dd51430bd98bf1bb0d3",
     ".software-factory/ratchet.yaml": "3cc4e36f405a8f84f9816671415b92348649de94acdd3f52aef010f6712b7c2b",
     ".software-factory/rules/browser-model-config-is-verified.yaml": "2bfe2e6ea36d9e6cec434c1af21ef461559c132e61ce68f32aaa7164483ef10c",

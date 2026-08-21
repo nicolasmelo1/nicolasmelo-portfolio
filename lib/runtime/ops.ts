@@ -226,3 +226,35 @@ export function applyOps(spec: Spec, ops: Op[]): { next: Spec; inverse: Op[] } {
   }
   return { next, inverse };
 }
+
+/**
+ * Apply what applies, and say what did not.
+ *
+ * `applyOps` is all-or-nothing, which is right for a journal entry and wrong at
+ * the boundary: a model that emits nineteen good ops and one impossible one —
+ * `unregister` of the root was the real case — should not lose the whole answer
+ * after twenty-five seconds of generation.
+ *
+ * Skipping is only safe because something downstream checks the finished
+ * document. Callers must run the catalog gate on `next`; without that, this is
+ * just a way to build an incoherent view quietly.
+ */
+export function applyApplicable(
+  spec: Spec,
+  ops: Op[],
+): { next: Spec; applied: Op[]; skipped: Op[] } {
+  let next = spec;
+  const applied: Op[] = [];
+  const skipped: Op[] = [];
+
+  for (const op of ops) {
+    try {
+      next = applyOp(next, op).next;
+      applied.push(op);
+    } catch {
+      skipped.push(op);
+    }
+  }
+
+  return { next, applied, skipped };
+}

@@ -33,7 +33,7 @@ export function buildDeltaPrompt(
 
       [
         "Rules that make a transaction valid:",
-        `- The root is \`${ROOT_ID}\` and always exists. Attach your top-level work to it.`,
+        `- The root is \`${ROOT_ID}\`. It always exists, and it can never be unregistered, detached or replaced. Attach your top-level work to it.`,
         "- Register a node before attaching it. Attach every node you register, or it will never be seen.",
         "- Ids must be new and descriptive, kebab-case, prefixed by the topic (e.g. `masa-panel`, `masa-links`).",
         "- Order matters: the ops run in sequence, so a parent must exist before its child is attached.",
@@ -52,7 +52,7 @@ export function buildDeltaPrompt(
 
       [
         "Replacing versus extending:",
-        "- A new question replaces the view: unregister the nodes currently attached to the root, then build the answer.",
+        `- A new question replaces the view: unregister the nodes that are *children* of \`${ROOT_ID}\`, never \`${ROOT_ID}\` itself, then build the answer.`,
         "- A refinement of what is on screen ('make it compact', 'group by tag') edits it instead: patchProps, attach, detach, and unregister only what the refinement removes.",
         "- Never leave a node registered but unattached.",
       ].join("\n"),

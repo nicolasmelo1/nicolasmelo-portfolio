@@ -5,6 +5,7 @@ import { JSONUIProvider, Renderer } from "@json-render/react";
 import { registry } from "@/components/portfolio/registry";
 import {
   generateDeltaInBrowser,
+  interruptLocalModel,
   localModelStarted,
   activeModel,
   autoLoadSkipReason,
@@ -12,13 +13,15 @@ import {
   type LoadPhase,
   type SkipReason,
 } from "@/lib/llm/browser";
+import { collectStreamedDelta } from "@/lib/llm/stream-client";
 import { retrievePortfolio } from "@/lib/retrieve";
 import {
   back,
   canGoBack,
   canGoForward,
-  commit,
+  commitChecked,
   createTimeline,
+  replaceHead,
   forward,
   head,
   reset,
@@ -28,7 +31,7 @@ import {
 } from "@/lib/runtime/timeline";
 import { BROWSER_MODELS, DEFAULT_MODEL } from "@/lib/llm/models";
 import { withViewTransition } from "@/lib/ui/animate";
-import { deterministicDelta } from "@/lib/ui/delta";
+import { checkedDeterministicDelta } from "@/lib/ui/delta";
 import { initialSpec } from "@/lib/ui/spec";
 
 const STORAGE_KEY = "nicolasmelo.portfolio.journal.v2";
@@ -47,73 +50,86 @@ type Stored = { deltas: Delta[]; cursor: number };
 function restore(stored: Stored): Timeline {
   let timeline = createTimeline(initialSpec);
   for (const delta of stored.deltas) {
-    try {
-      timeline = commit(timeline, delta);
-    } catch {
-      // A Δ authored against an older catalog is simply not replayed. The
-      // journal is a record of intent, not a migration.
-      break;
-    }
+    // A Δ authored against an older catalog is simply not replayed. The journal
+    // is a record of intent, not a migration.
+    const next = commitChecked(timeline, delta);
+    if (!next) break;
+    timeline = next;
   }
   const target = Math.min(stored.cursor, timeline.entries.length);
   while (timeline.cursor > target) timeline = back(timeline);
   return timeline;
 }
 
+type Inference = {
+  status: "idle" | "running" | "stopped" | "settled";
+  query: string | null;
+  by: Source | null;
+};
+
+/** What a refinement needs in order to replace the provisional answer. */
+type Inflight = {
+  token: number;
+  question: string;
+  /** The document as it was *before* the provisional Δ. */
+  spec: Timeline["current"];
+  /** Where the cursor sat once the provisional Δ was committed. */
+  cursor: number;
+  controller: AbortController;
+};
+
 export function PortfolioApp() {
   const [timeline, setTimeline] = useState<Timeline>(() => createTimeline(initialSpec));
   const [query, setQuery] = useState("");
-  const [busy, setBusy] = useState(false);
   const [source, setSource] = useState<Source>("deterministic");
+  const [inference, setInference] = useState<Inference>({ status: "idle", query: null, by: null });
   const [phase, setPhase] = useState<LoadPhase>("idle");
   const [status, setStatus] = useState("");
   const [skipped, setSkipped] = useState<SkipReason | null>(null);
   const [loaded, setLoaded] = useState<string | null>(null);
+  /**
+   * The document being assembled by a stream.
+   *
+   * Staging, not committing. The timeline never holds a half-applied
+   * transaction, so "the last valid state" is whatever is committed — and
+   * abandoning a stream is dropping this, with no inverse to run.
+   */
+  const [staged, setStaged] = useState<Timeline["current"] | null>(null);
   const [hydrated, setHydrated] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // The timeline is read from inside async callbacks that outlive the render
+  // they started in, so a ref carries the current value alongside the state.
+  const timelineRef = useRef(timeline);
+  const tokenRef = useRef(0);
+  const inflightRef = useRef<Inflight | null>(null);
+
+  function setTimelineNow(next: Timeline) {
+    timelineRef.current = next;
+    setTimeline(next);
+  }
+
   useEffect(() => {
-    // localStorage, `navigator.gpu` and the connection type do not exist during
-    // SSR, so all of this has to run after mount. Reading them in a state
-    // initialiser would render a different tree on the server than on the
-    // client and break hydration.
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- client-only reads, see above
+    // localStorage does not exist during SSR, so this has to run after mount.
+    // Reading it in a state initialiser would render a different tree on the
+    // server than on the client and break hydration.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- client-only read, see above
     setHydrated(true);
 
     const saved = window.localStorage.getItem(STORAGE_KEY);
     if (saved) {
       try {
-        setTimeline(restore(JSON.parse(saved) as Stored));
+        const restored = restore(JSON.parse(saved) as Stored);
+        timelineRef.current = restored;
+        setTimeline(restored);
       } catch {
         window.localStorage.removeItem(STORAGE_KEY);
       }
     }
 
-    // The model loads itself, in a worker, without being asked and without
-    // blocking anything. Until it is ready every question goes to the server
-    // route, so the only thing a visitor notices is that answers get faster.
-    // `idle` means "the browser has not told us anything yet", which is also
-    // what the server renders. Resolving it here rather than in render is what
-    // keeps the first client paint identical to the server HTML.
-    const skip = autoLoadSkipReason();
-    if (skip || localModelStarted()) {
-      setPhase("unavailable");
-      setSkipped(skip);
-      return;
-    }
-    setPhase("loading");
-    startLocalModel((message) => setStatus(message))
-      .then(() => {
-        setPhase("ready");
-        setStatus("");
-        // Which model came up matters: a failed default falls back silently
-        // otherwise, and "ready" would hide that it is not the one we chose.
-        setLoaded(activeModel());
-      })
-      .catch((error: unknown) => {
-        setPhase("unavailable");
-        setStatus(error instanceof Error ? error.message : String(error));
-      });
+    // Nothing about the model happens here. It used to auto-load on mount,
+    // which spent 672 MB and a shader compilation on every visit for a model
+    // that only answers when the cloud cannot.
   }, []);
 
   useEffect(() => {
@@ -125,166 +141,388 @@ export function PortfolioApp() {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
   }, [hydrated, timeline]);
 
-  async function ask(raw: string) {
-      const question = raw.trim();
-      if (!question || busy) return;
+  /** Abandon whatever inference is in flight. Safe to call when there is none. */
+  function cancelInflight() {
+    inflightRef.current?.controller.abort();
+    inflightRef.current = null;
+    interruptLocalModel();
+    // Dropping the staged document is the whole rollback: nothing partial ever
+    // reached the journal.
+    setStaged(null);
+  }
 
-      setBusy(true);
-      setQuery("");
-      const spec = timeline.current;
+  const stale = (token: number) => tokenRef.current !== token;
 
-      const applyDelta = (proposal: { label: string; ops: Delta["ops"] }, from: Source) => {
-        withViewTransition(() => {
-          setTimeline((current) =>
-            commit(current, {
-              id: `d${current.entries.length + 1}`,
-              query: question,
-              source: from,
-              ...proposal,
-            }),
-          );
-          setSource(from);
-        });
+  function travel(next: Timeline) {
+    // Navigating invalidates a refinement: it was authored to replace a
+    // provisional answer that is no longer the one on screen.
+    cancelInflight();
+    tokenRef.current += 1;
+    setInference({ status: "idle", query: null, by: null });
+    withViewTransition(() => setTimelineNow(next));
+  }
+
+  /**
+   * Answer immediately, then improve.
+   *
+   * The deterministic author runs first and synchronously, so a question always
+   * produces a page straight away and the composer is never disabled. The model
+   * is a *refinement*: when it answers, the provisional Δ is undone and the real
+   * one applied in its place, which is what keeps the journal at one Δ per
+   * question. The kernel already had to be able to take a Δ back; this is the
+   * same mechanism used forwards.
+   */
+  function ask(raw: string) {
+    const question = raw.trim();
+    if (!question) return;
+
+    cancelInflight();
+    setQuery("");
+
+    const spec = timelineRef.current.current;
+    const provisional = checkedDeterministicDelta(spec, question, retrievePortfolio(question));
+    const committed = commitChecked(timelineRef.current, {
+      id: `d${timelineRef.current.entries.length + 1}`,
+      query: question,
+      // `offline`: authored here, instantly, with no model and no repository
+      // read. The route's own fallback is `deterministic` and carries both.
+      source: "offline",
+      ...provisional,
+    });
+    if (!committed) return;
+
+    withViewTransition(() => {
+      setTimelineNow(committed);
+      setSource("offline");
+    });
+    inputRef.current?.focus();
+
+    const token = (tokenRef.current += 1);
+    inflightRef.current = {
+      token,
+      question,
+      spec,
+      cursor: committed.cursor,
+      controller: new AbortController(),
+    };
+    setInference({ status: "running", query: question, by: null });
+    void refine(token);
+  }
+
+  /** Replace the provisional Δ with a better one, if it is still the one on screen. */
+  function replaceProvisional(delta: { label: string; ops: Delta["ops"] }, by: Source, token: number) {
+    const inflight = inflightRef.current;
+    if (!inflight || stale(token)) return false;
+    // The visitor walked somewhere else: the refinement no longer belongs here.
+    if (timelineRef.current.cursor !== inflight.cursor) return false;
+
+    const next = replaceHead(timelineRef.current, {
+      id: `d${timelineRef.current.cursor}`,
+      query: inflight.question,
+      source: by,
+      ...delta,
+    });
+    if (!next) return false;
+
+    withViewTransition(() => {
+      setTimelineNow(next);
+      setSource(by);
+    });
+    return true;
+  }
+
+  async function refine(token: number) {
+    const inflight = inflightRef.current;
+    if (!inflight) return;
+    const { question, spec, controller } = inflight;
+
+    const settle = (by: Source) =>
+      setInference((current) =>
+        current.query === question ? { status: "settled", query: question, by } : current,
+      );
+
+    // Streamed first. Generation is 11 to 87 seconds depending on the model,
+    // and the ops inside a transaction are independent and ordered, so the
+    // interface can assemble itself while the model is still writing.
+    const streamed = await streamFromServer(question, spec, controller.signal, token);
+    if (stale(token)) return;
+    if (streamed) return settle("cloud");
+
+    const cloud = await askServer(question, spec, controller.signal);
+    if (stale(token)) return;
+
+    if (cloud) {
+      // Applied the moment it lands, whatever authored it. The route's own
+      // fallback still carries the repository read that the provisional answer
+      // built in this browser could not, so it is already an improvement.
+      //
+      // Waiting for the local model before showing this was the bug behind
+      // "the endpoint returned 200 and the page did not change": with no API
+      // key the route answers `deterministic`, and the old order downloaded
+      // 672 MB before rendering it.
+      replaceProvisional(cloud.delta, cloud.source, token);
+      if (cloud.source === "cloud") return settle("cloud");
+      settle(cloud.source);
+    }
+
+    // The route had no model of its own — no key, provider down, rate limited.
+    // A local model beats the fallback author, so it is worth loading now that
+    // something is already on screen.
+    setInference((current) =>
+      current.query === question ? { status: "running", query: question, by: null } : current,
+    );
+    const local = await askLocal(question, spec, token);
+    if (stale(token)) return;
+    if (local && replaceProvisional(local, "local", token)) return settle("local");
+
+    settle(cloud?.source ?? "offline");
+  }
+
+  /**
+   * Stream the model's transaction, applying each op as it closes.
+   *
+   * Returns true when a whole transaction arrived and was committed. Anything
+   * else — no key, a refused op, a truncated body — leaves the provisional
+   * answer exactly as it was and lets the caller try something else.
+   */
+  async function streamFromServer(
+    question: string,
+    spec: Timeline["current"],
+    signal: AbortSignal,
+    token: number,
+  ): Promise<boolean> {
+    let collected;
+    try {
+      const response = await fetch("/api/chat/stream", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: question, spec }),
+        signal,
+      });
+      if (!response.ok) return false;
+
+      collected = await collectStreamedDelta(response, spec, {
+        isStale: () => stale(token),
+        onProgress: setStaged,
+      });
+    } catch {
+      // Aborted, or the connection died mid-transaction.
+      setStaged(null);
+      return false;
+    }
+
+    if (stale(token) || !collected.finished || !collected.ops.length) {
+      // Dropping the staging is the whole rollback: nothing partial ever
+      // reached the journal.
+      setStaged(null);
+      return false;
+    }
+
+    const committed = replaceProvisional(
+      { label: collected.label ?? question, ops: collected.ops },
+      "cloud",
+      token,
+    );
+    setStaged(null);
+    return committed;
+  }
+
+  /** Ask the route. Returns null when it could not be reached, or was cancelled. */
+  async function askServer(question: string, spec: Timeline["current"], signal: AbortSignal) {
+    try {
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: question, spec }),
+        signal,
+      });
+      if (!response.ok) throw new Error(`chat endpoint returned ${response.status}`);
+
+      const payload = (await response.json()) as {
+        delta?: { label?: string; ops?: Delta["ops"] };
+        source?: Source;
       };
-
-      // The local attempt gets its own guard. It used to sit inside the same
-      // try as the server call, so a thrown engine error jumped straight to the
-      // last-resort branch below — skipping the server, and with it the cloud
-      // author and the repository read. A local failure should cost latency,
-      // not the whole answer.
-      if (phase === "ready") {
-        try {
-          const local = await generateDeltaInBrowser(question, spec);
-          if (local) {
-            applyDelta(local, "local");
-            setBusy(false);
-            inputRef.current?.focus();
-            return;
-          }
-        } catch (error) {
-          console.warn("[local model] could not author a Δ, asking the server", error);
-        }
+      if (!payload.delta?.ops?.length || !payload.delta.label) {
+        throw new Error("endpoint returned no transaction");
       }
+      return {
+        delta: { label: payload.delta.label, ops: payload.delta.ops },
+        source: payload.source ?? "deterministic",
+      };
+    } catch (error) {
+      if (signal.aborted) return null;
+      console.warn("[cloud] unavailable", error);
+      return null;
+    }
+  }
 
-      try {
-        const response = await fetch("/api/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ query: question, spec }),
-        });
-        if (!response.ok) throw new Error(`chat endpoint returned ${response.status}`);
+  /**
+   * Ask the local model, loading it on demand.
+   *
+   * Lazy on purpose: downloading 672 MB and compiling shaders on every visit is
+   * hard to justify for a model that only answers when the cloud cannot.
+   */
+  async function askLocal(question: string, spec: Timeline["current"], token: number) {
+    const skip = autoLoadSkipReason();
+    if (skip) {
+      // Worth saying only now: the cloud already failed, so this is why there
+      // is no second chance.
+      setPhase("unavailable");
+      setSkipped(skip);
+      return null;
+    }
 
-        const payload = (await response.json()) as {
-          delta?: { label?: string; ops?: Delta["ops"] };
-          source?: Source;
-        };
-        if (!payload.delta?.ops?.length || !payload.delta.label) {
-          throw new Error("endpoint returned no transaction");
-        }
-        applyDelta(
-          { label: payload.delta.label, ops: payload.delta.ops },
-          payload.source ?? "deterministic",
-        );
-      } catch {
-        // No repo read here: this branch runs because the network just failed,
-        // so another fetch would only add latency. Labelled `offline` rather
-        // than `deterministic` — the server's deterministic author has the
-        // repository data, and this one cannot.
-        applyDelta(deterministicDelta(spec, question, retrievePortfolio(question)), "offline");
-      } finally {
-        setBusy(false);
-        inputRef.current?.focus();
+    try {
+      if (!localModelStarted()) {
+        setPhase("loading");
+        await startLocalModel((message) => setStatus(message));
+        if (stale(token)) return null;
+        setPhase("ready");
+        setStatus("");
+        setLoaded(activeModel());
       }
+      return await generateDeltaInBrowser(question, spec);
+    } catch (error) {
+      console.warn("[local model] could not author a Δ", error);
+      setPhase("unavailable");
+      setStatus(error instanceof Error ? error.message : String(error));
+      return null;
+    }
+  }
+
+  /**
+   * Back, with a stream in flight, means "the last valid state" — which is the
+   * one before the stream started, not the one before the question. A partial
+   * transaction is not a checkpoint, so there is nothing to step through.
+   */
+  function goBack() {
+    if (staged) {
+      stopInference();
+      return;
+    }
+    travel(back(timeline));
+  }
+
+  function stopInference() {
+    const inflight = inflightRef.current;
+    if (!inflight) return;
+    cancelInflight();
+    tokenRef.current += 1;
+    setInference({ status: "stopped", query: inflight.question, by: null });
+  }
+
+  /**
+   * Run the refinement again for the answer currently on screen.
+   *
+   * Only offered while that answer is still the head of the journal, because a
+   * refinement replaces the Δ at the cursor and nothing else.
+   */
+  function resumeInference() {
+    const current = head(timelineRef.current);
+    if (!current) return;
+
+    const rolled = back(timelineRef.current);
+    const token = (tokenRef.current += 1);
+    inflightRef.current = {
+      token,
+      question: current.query,
+      spec: rolled.current,
+      cursor: timelineRef.current.cursor,
+      controller: new AbortController(),
+    };
+    setInference({ status: "running", query: current.query, by: null });
+    void refine(token);
   }
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    void ask(query);
+    ask(query);
   }
 
   const empty = timeline.cursor === 0;
   const current = head(timeline);
+  const running = inference.status === "running";
+  const stopped = inference.status === "stopped";
+  // Worth offering a retry when the model never got to author: either the
+  // visitor stopped it, or it settled on an answer no model wrote.
+  const canResume =
+    !!current &&
+    (stopped || (inference.status === "settled" && inference.by !== "cloud" && inference.by !== "local"));
 
   const composer = (
-    <form onSubmit={submit} className="w-full">
-      <div className="flex items-center gap-2 rounded-xl border border-[--line] bg-[--surface-1] px-3 py-2 focus-within:border-[--accent]">
-        <span aria-hidden="true" className="font-mono text-xs text-[--fg-faint]">
-          ›
-        </span>
-        <input
-          ref={inputRef}
-          id="portfolio-query"
-          name="query"
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Ask about projects, architecture, agents, tooling…"
-          autoComplete="off"
-          disabled={busy}
-          aria-label="Ask"
-          className="min-w-0 flex-1 bg-transparent text-sm text-[--fg] outline-none placeholder:text-[--fg-faint] disabled:opacity-50"
-        />
-        <button
-          type="submit"
-          disabled={busy || !query.trim()}
-          aria-label="Send"
-          className="shrink-0 rounded-lg bg-[--accent] px-2.5 py-1 text-xs font-medium text-[--accent-fg] disabled:opacity-30"
-        >
-          {busy ? "…" : "↑"}
-        </button>
-      </div>
+    <form onSubmit={submit} className="jr-composer">
+      <label htmlFor="portfolio-query" className="jr-prompt">
+        visitor&gt;
+      </label>
+      <input
+        ref={inputRef}
+        id="portfolio-query"
+        name="query"
+        value={query}
+        onChange={(event) => setQuery(event.target.value)}
+        placeholder="ask about projects, experience, architecture, tooling..."
+        autoComplete="off"
+        aria-label="Ask"
+        className="jr-input"
+      />
+      <button type="submit" disabled={!query.trim()} aria-label="Send" className="jr-key">
+        [ enter ]
+      </button>
     </form>
   );
 
   const history = (
-    <div className="flex shrink-0 items-center gap-1">
+    <span className="jr-keys">
       <button
         type="button"
-        onClick={() => withViewTransition(() => setTimeline(back))}
-        disabled={!canGoBack(timeline) || busy}
+        onClick={goBack}
+        disabled={!canGoBack(timeline)}
         aria-label="Back to the previous interface"
-        className="rounded-md px-2 py-1 text-xs text-[--fg-dim] hover:bg-[--surface-2] hover:text-[--fg] disabled:opacity-25"
+        className="jr-key"
       >
-        ‹ back
+        [ &lt; back ]
       </button>
       <button
         type="button"
-        onClick={() => withViewTransition(() => setTimeline(forward))}
-        disabled={!canGoForward(timeline) || busy}
+        onClick={() => travel(forward(timeline))}
+        disabled={!canGoForward(timeline)}
         aria-label="Forward to the next interface"
-        className="rounded-md px-2 py-1 text-xs text-[--fg-dim] hover:bg-[--surface-2] hover:text-[--fg] disabled:opacity-25"
+        className="jr-key"
       >
-        forward ›
+        [ forward &gt; ]
       </button>
-    </div>
+    </span>
   );
 
   if (empty) {
     return (
-      <main className="flex h-dvh flex-col items-center justify-center overflow-hidden px-6">
-        <div className="w-full max-w-2xl">
-          <h1 className="mb-6 text-center text-2xl font-medium text-[--fg]">
-            What do you want to know?
-          </h1>
+      <main className="jr-shell jr-centre">
+        <div className="jr-column">
+          <pre aria-hidden="true" className="jr-rule">
+            {"+-------------------------[ NICOLAS MELO ]-------------------------+"}
+          </pre>
+          <h1 className="jr-heading">What do you want to know?</h1>
           {composer}
-          <div className="mt-4 flex flex-wrap justify-center gap-2">
+          <div className="jr-presets">
             {PRESETS.map((preset) => (
               <button
                 key={preset}
                 type="button"
-                disabled={busy}
-                onClick={() => void ask(preset)}
-                className="rounded-full border border-[--line] px-3 py-1.5 text-xs text-[--fg-dim] transition-colors hover:border-[--accent] hover:text-[--fg] disabled:opacity-40"
+                onClick={() => ask(preset)}
+                aria-label={preset}
+                className="jr-key"
               >
-                {preset}
+                [ {preset} ]
               </button>
             ))}
           </div>
-          <p className="mt-8 text-center text-xs text-[--fg-faint]">
-            Nicolas Melo — every answer rewrites this page, and every change can be walked back.
+          <pre aria-hidden="true" className="jr-rule">
+            {"+------------------------------------------------------------------+"}
+          </pre>
+          <p className="jr-note">
+            every answer rewrites this page. every change can be walked back.
           </p>
-          {canGoForward(timeline) ? (
-            <div className="mt-4 flex justify-center">{history}</div>
-          ) : null}
+          {canGoForward(timeline) ? <div className="jr-presets">{history}</div> : null}
         </div>
         <ModelStatus phase={phase} status={status} skipped={skipped} loaded={loaded} />
       </main>
@@ -292,39 +530,40 @@ export function PortfolioApp() {
   }
 
   return (
-    <main className="flex h-dvh flex-col overflow-hidden">
-      <header className="flex shrink-0 flex-col gap-2 border-b border-[--line] px-4 py-3">
-        <div className="mx-auto flex w-full max-w-5xl items-center gap-3">
-          <div className="min-w-0 flex-1">{composer}</div>
+    <main className="jr-shell">
+      <header className="jr-header">
+        <div className="jr-header-row">
+          <div className="jr-min jr-grow">{composer}</div>
           {history}
           <button
             type="button"
-            onClick={() => withViewTransition(() => setTimeline(reset))}
-            disabled={busy}
-            className="shrink-0 rounded-md px-2 py-1 text-xs text-[--fg-faint] hover:text-[--fg] disabled:opacity-25"
+            onClick={() => travel(reset(timeline))}
+            aria-label="reset"
+            className="jr-key"
           >
-            reset
+            [ reset ]
           </button>
         </div>
-        <div className="mx-auto flex w-full max-w-5xl items-center gap-2 font-mono text-[10px] uppercase tracking-wider text-[--fg-faint]">
-          <span className="truncate">
-            Δ{timeline.cursor}
-            {current ? ` · ${current.label}` : ""}
-          </span>
-          <span aria-hidden="true">·</span>
-          <span>{source}</span>
-          {timeline.discarded.length ? (
-            <>
-              <span aria-hidden="true">·</span>
-              <span>{timeline.discarded.flat().length} discarded</span>
-            </>
-          ) : null}
+        <div className="jr-note-row">
+          <p className="jr-note jr-truncate">
+            {`d${timeline.cursor}`}
+            {current ? ` / ${current.label}` : ""}
+            {` / ${source}`}
+            {timeline.discarded.length ? ` / ${timeline.discarded.flat().length} discarded` : ""}
+          </p>
+          <RefinementStatus
+            running={running}
+            stopped={stopped}
+            canResume={canResume}
+            onStop={stopInference}
+            onResume={resumeInference}
+          />
         </div>
       </header>
 
-      <div className="mx-auto min-h-0 w-full max-w-5xl flex-1 overflow-hidden p-4">
+      <div className="jr-workspace">
         <JSONUIProvider registry={registry}>
-          <Renderer spec={timeline.current} registry={registry} />
+          <Renderer spec={staged ?? timeline.current} registry={registry} />
         </JSONUIProvider>
       </div>
 
@@ -334,19 +573,60 @@ export function PortfolioApp() {
 }
 
 /**
+ * Whether a better answer is still coming, and how to stop waiting for it.
+ *
+ * Stated rather than implied: the answer on screen is already usable, so the
+ * only question left is whether it is the final one.
+ */
+function RefinementStatus({
+  running,
+  stopped,
+  canResume,
+  onStop,
+  onResume,
+}: {
+  running: boolean;
+  stopped: boolean;
+  canResume: boolean;
+  onStop: () => void;
+  onResume: () => void;
+}) {
+  if (running) {
+    return (
+      <p className="jr-note">
+        <span className="jr-working">... refining</span>{" "}
+        <button type="button" onClick={onStop} aria-label="Stop the model" className="jr-key">
+          [ stop ]
+        </button>
+      </p>
+    );
+  }
+
+  if (!canResume) return null;
+
+  return (
+    <p className="jr-note">
+      {stopped ? "stopped" : "model did not answer"}{" "}
+      <button type="button" onClick={onResume} aria-label="Ask the model again" className="jr-key">
+        [ resume ]
+      </button>
+    </p>
+  );
+}
+
+const SKIP_LABEL: Record<SkipReason, string> = {
+  "no-webgpu": "no webgpu",
+  "data-saver": "data saver on",
+  // Derived from the registry so the figure cannot drift from the model in use.
+  "slow-connection": `connection too slow for ${DEFAULT_MODEL.downloadMB} MB`,
+};
+
+/**
  * Rendered from props alone. An earlier version asked the browser whether
  * WebGPU existed while rendering, which the server cannot answer the same way —
  * so the server emitted this line and the client did not, and hydration failed.
  * Capability now arrives through `phase`, resolved in the mount effect.
  */
-// Derived from the registry so the figure cannot drift from the model in use —
-// it already did once, when the copy quoted a VRAM number as a download size.
-const SKIP_LABEL: Record<SkipReason, string> = {
-  "no-webgpu": "server model · this browser has no WebGPU",
-  "data-saver": "server model · data saver is on",
-  "slow-connection": `server model · connection too slow for ${DEFAULT_MODEL.downloadMB} MB`,
-};
-
 function ModelStatus({
   phase,
   status,
@@ -361,21 +641,18 @@ function ModelStatus({
   if (phase === "idle") return null;
 
   const readyLabel = BROWSER_MODELS.find((model) => model.id === loaded)?.label;
-  const label =
+  const text =
     phase === "ready"
-      ? `local model ready${readyLabel ? ` · ${readyLabel}` : ""}`
+      ? `[local model] ready${readyLabel ? ` / ${readyLabel}` : ""}`
       : phase === "loading"
-        ? status || "loading local model…"
+        ? `[local model] ${status || "loading ..."}`
         : skipped
-          ? SKIP_LABEL[skipped]
-          : `server model · ${status || "local model unavailable"}`;
+          ? `[server model] ${SKIP_LABEL[skipped]}`
+          : `[server model] ${status || "local model unavailable"}`;
 
   return (
-    <p
-      aria-live="polite"
-      className="pointer-events-none fixed bottom-3 right-4 max-w-[40vw] truncate font-mono text-[10px] text-[--fg-faint]"
-    >
-      {label}
+    <p aria-live="polite" className="jr-status">
+      {text}
     </p>
   );
 }

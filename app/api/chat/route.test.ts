@@ -18,6 +18,11 @@ const originalKey = process.env.OPENROUTER_API_KEY;
 
 beforeEach(() => {
   delete process.env.OPENROUTER_API_KEY;
+  // Stated rather than assumed. These cases are about the no-key path, and a
+  // real key reaching this process would make them fail for a reason that has
+  // nothing to do with the code under test — which happened once, and cost more
+  // time to explain than this line costs to keep.
+  expect(process.env.OPENROUTER_API_KEY, "a real key leaked into the test env").toBeUndefined();
 });
 
 afterEach(() => {

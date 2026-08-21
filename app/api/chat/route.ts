@@ -2,29 +2,20 @@ import { NextResponse } from "next/server";
 import type { Spec } from "@json-render/core";
 import { retrievePortfolio } from "@/lib/retrieve";
 import { readReposFor } from "@/lib/sources/github";
-import { applyOps, type Op } from "@/lib/runtime/ops";
-import { deterministicDelta, parseDelta } from "@/lib/ui/delta";
+import { checkedDeterministicDelta, validateDeltaAgainstSpec } from "@/lib/ui/delta";
 import { buildDeltaPrompt } from "@/lib/ui/prompt";
+import { extractJsonObject } from "@/lib/ui/stream";
 import { parsePortfolioSpec } from "@/lib/ui/spec";
 
-function stripCodeFence(value: string) {
-  return value.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
-}
-
 /**
- * A Δ is only worth returning if it actually applies. Trial-applying it here,
- * against the same spec the client holds, means a malformed transaction becomes
- * a fallback on the server rather than a thrown op in the browser — and the
- * resulting document is checked against the catalog too, so a Δ can neither
- * fail to run nor run into something unrenderable.
+ * Which OpenRouter model authors the Δ.
+ *
+ * `openrouter/free` is the default because it costs nothing, but it routes to
+ * whatever free model is available — measured at 19s to 87s, sometimes rate
+ * limited, sometimes returning a transaction that does not parse. Paid models
+ * of this size answered in ~11s for fractions of a cent; set this to pick one.
  */
-function applies(spec: Spec, ops: Op[]) {
-  try {
-    return parsePortfolioSpec(applyOps(spec, ops).next) !== null;
-  } catch {
-    return false;
-  }
-}
+const MODEL = process.env.OPENROUTER_MODEL ?? "openrouter/free";
 
 export async function POST(request: Request) {
   const body = (await request.json()) as { query?: string; spec?: Spec };
@@ -43,7 +34,7 @@ export async function POST(request: Request) {
 
   const fallback = () =>
     NextResponse.json({
-      delta: deterministicDelta(currentSpec, query, context, repos),
+      delta: checkedDeterministicDelta(currentSpec, query, context, repos),
       source: "deterministic",
     });
 
@@ -59,7 +50,7 @@ export async function POST(request: Request) {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "openrouter/free",
+        model: MODEL,
         messages: [
           { role: "system", content: prompt.system },
           { role: "user", content: prompt.user },
@@ -78,12 +69,18 @@ export async function POST(request: Request) {
     const content = payload.choices?.[0]?.message?.content;
     if (!content) throw new Error("Empty model response");
 
-    const delta = parseDelta(JSON.parse(stripCodeFence(content)));
-    if (!delta) throw new Error("Model returned an invalid transaction");
-    if (!applies(currentSpec, delta.ops)) throw new Error("Transaction does not apply");
+    const json = extractJsonObject(content);
+    if (!json) throw new Error("Model reply contained no JSON object");
+    const delta = validateDeltaAgainstSpec(currentSpec, JSON.parse(json));
+    if (!delta) throw new Error("Model returned a transaction the gate refused");
 
     return NextResponse.json({ delta, source: "cloud" });
-  } catch {
+  } catch (error) {
+    // Logged, not swallowed. Every OpenRouter failure used to look identical to
+    // "no key configured" from the outside — the response just said
+    // `deterministic` — which made a broken model id, a refused transaction and
+    // a missing env var indistinguishable in the one place they matter.
+    console.warn("[openrouter] falling back to the deterministic author:", MODEL, error);
     return fallback();
   }
 }

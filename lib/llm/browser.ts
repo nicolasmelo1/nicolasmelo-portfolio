@@ -4,7 +4,8 @@ import type { Spec } from "@json-render/core";
 import { DEFAULT_MODEL, FALLBACK_MODEL, REQUESTED_CONTEXT } from "@/lib/llm/models";
 import type { PortfolioCapsule } from "@/content/portfolio";
 import { retrievePortfolio } from "@/lib/retrieve";
-import { parseDelta } from "@/lib/ui/delta";
+import { validateDeltaAgainstSpec } from "@/lib/ui/delta";
+import { extractJsonObject } from "@/lib/ui/stream";
 import { buildDeltaPrompt } from "@/lib/ui/prompt";
 
 export type ChatRequest = {
@@ -180,7 +181,7 @@ export function startLocalModel(onProgress?: (message: string) => void): Promise
       try {
         return await initEngine(DEFAULT_MODEL.id, onProgress);
       } catch (error) {
-        console.warn(`[local model] ${DEFAULT_MODEL.id} failed, trying fallback`, error);
+        console.warn("[local model] failed, trying fallback:", DEFAULT_MODEL.id, error);
         onProgress?.(`${DEFAULT_MODEL.label} failed — trying ${FALLBACK_MODEL.label}`);
         return await initEngine(FALLBACK_MODEL.id, onProgress);
       }
@@ -197,6 +198,23 @@ export function startLocalModel(onProgress?: (message: string) => void): Promise
   return enginePromise;
 }
 
+/**
+ * Stop whatever the engine is generating, now.
+ *
+ * There is no abort signal on the request, so this is how an in-flight local
+ * inference is cut short — when the visitor presses stop, or asks something
+ * else while the last answer is still being written.
+ */
+export function interruptLocalModel() {
+  void enginePromise
+    ?.then((engine) => {
+      (engine as unknown as { interruptGenerate?: () => void }).interruptGenerate?.();
+    })
+    .catch(() => {
+      // Nothing to interrupt if it never came up.
+    });
+}
+
 /** Which model actually came up, once one has. */
 export function activeModel() {
   return activeModelId;
@@ -204,10 +222,6 @@ export function activeModel() {
 
 export function localModelStarted() {
   return enginePromise !== null;
-}
-
-function stripCodeFence(value: string) {
-  return value.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
 }
 
 /**
@@ -248,7 +262,11 @@ export async function generateDeltaInBrowser(query: string, currentSpec: Spec) {
   if (!content || typeof content !== "string") return null;
 
   try {
-    return parseDelta(JSON.parse(stripCodeFence(content)));
+    const json = extractJsonObject(content);
+    if (!json) return null;
+    // The same gate the server uses. Schema-valid is not the same as
+    // applicable, and neither is the same as renderable.
+    return validateDeltaAgainstSpec(currentSpec, JSON.parse(json));
   } catch {
     return null;
   }

@@ -1,12 +1,15 @@
 import type { Spec } from "@json-render/core";
 import { describe, expect, it } from "vitest";
-import { applyOp, applyOps, OpError, type Op } from "@/lib/runtime/ops";
+import { applyApplicable, applyOp, applyOps, OpError, type Op } from "@/lib/runtime/ops";
 import {
   back,
   canGoBack,
   canGoForward,
   commit,
+  commitChecked,
   createTimeline,
+  deltaSchema,
+  replaceHead,
   forward,
   head,
   replay,
@@ -91,6 +94,51 @@ describe("applyOp — every op is exactly invertible", () => {
     expect(() => applyOp(base, { kind: "attach", parent: "page", child: "intro" })).toThrow(OpError);
     expect(() => applyOp(base, { kind: "detach", parent: "page", child: "ghost" })).toThrow(OpError);
     expect(() => applyOp(base, { kind: "setRoot", id: "ghost" })).toThrow(OpError);
+  });
+});
+
+describe("applyApplicable — one bad op is not a lost transaction", () => {
+  it("applies what applies and reports what did not", () => {
+    // The reported case: a model emitted `unregister` of the root partway
+    // through an otherwise fine transaction, and the whole answer was lost
+    // after twenty-five seconds of generation.
+    const ops: Op[] = [
+      { kind: "unregister", id: "page" },
+      { kind: "register", id: "card", node: node("Card", { title: "c" }) },
+      { kind: "attach", parent: "page", child: "card" },
+    ];
+
+    const { next, applied, skipped } = applyApplicable(base, ops);
+    expect(skipped).toEqual([{ kind: "unregister", id: "page" }]);
+    expect(applied).toHaveLength(2);
+    expect(next.elements.card).toBeDefined();
+    expect(next.elements.page.children).toContain("card");
+  });
+
+  it("leaves the spec untouched when nothing applies", () => {
+    const { next, applied, skipped } = applyApplicable(base, [
+      { kind: "attach", parent: "ghost", child: "page" },
+      { kind: "unregister", id: "missing" },
+    ]);
+    expect(applied).toEqual([]);
+    expect(skipped).toHaveLength(2);
+    expect(next).toEqual(base);
+  });
+
+  it("applies a clean transaction whole, skipping nothing", () => {
+    const { applied, skipped } = applyApplicable(base, addCard("fine"));
+    expect(applied).toHaveLength(2);
+    expect(skipped).toEqual([]);
+  });
+
+  it("keeps the ops it applied reversible", () => {
+    // Skipping must not break the journal: what survives is still a Δ.
+    const { applied } = applyApplicable(base, [
+      { kind: "unregister", id: "page" },
+      ...addCard("card"),
+    ]);
+    const t = commit(createTimeline(base), delta("mixed", applied));
+    expect(back(t).current).toEqual(base);
   });
 });
 
@@ -190,6 +238,128 @@ describe("timeline — abandoned branches leave no residue", () => {
     }
     // The surviving document is what a fresh run of the survivors would build.
     expect(winner.current).toEqual(replay(winner));
+  });
+});
+
+describe("commitChecked — the kernel boundary", () => {
+  // The exact crash: a Δ attached `d1-palmares-summary` without registering it,
+  // `commit` threw from inside a React state updater, and the page died.
+  it("refuses a Δ that attaches a node it never registered", () => {
+    const t = createTimeline(base);
+    const bad = delta("bad", [{ kind: "attach", parent: "page", child: "d1-palmares-summary" }]);
+    expect(() => commit(t, bad)).toThrow();
+    expect(commitChecked(t, bad)).toBeNull();
+  });
+
+  it("leaves the timeline untouched when it refuses", () => {
+    const t = commit(createTimeline(base), delta("good", addCard("keep")));
+    const before = JSON.stringify(t);
+    expect(commitChecked(t, delta("bad", [{ kind: "unregister", id: "ghost" }]))).toBeNull();
+    expect(JSON.stringify(t)).toBe(before);
+  });
+
+  it("still applies a Δ that is fine", () => {
+    const t = commitChecked(createTimeline(base), delta("ok", addCard("card")));
+    expect(t?.current.elements.card).toBeDefined();
+    expect(t?.cursor).toBe(1);
+  });
+
+  it("never throws, for any schema-valid Δ", () => {
+    // The property that matters: a Δ is untrusted input, and the difference
+    // between "rejected" and "the page is gone" cannot depend on the model
+    // getting its ids right. Seeded so a failure is reproducible.
+    const ids = ["page", "intro", "ghost", "a", "b", ""];
+    const kinds = ["register", "unregister", "attach", "detach", "setRoot", "patchProps", "dropProps"];
+
+    let state = 7;
+    const random = () => {
+      state = (state * 1103515245 + 12345) % 2147483648;
+      return state / 2147483648;
+    };
+    const pick = <T,>(list: T[]) => list[Math.floor(random() * list.length)];
+
+    let timeline: Timeline = createTimeline(base);
+    for (let step = 0; step < 500; step += 1) {
+      const kind = pick(kinds);
+      const id = pick(ids);
+      const ops = [
+        kind === "register"
+          ? { kind, id, node: node("Card", { title: id }) }
+          : kind === "attach" || kind === "detach"
+            ? { kind, parent: pick(ids), child: id }
+            : kind === "patchProps"
+              ? { kind, id, props: { title: "x" } }
+              : kind === "dropProps"
+                ? { kind, id, keys: ["title"] }
+                : { kind, id },
+      ] as Op[];
+
+      // Only exercise what the schema would have let through.
+      if (!deltaSchema.safeParse({ label: "fuzz", ops }).success) continue;
+
+      const before = JSON.stringify(timeline);
+      let next: Timeline | null = null;
+      expect(() => {
+        next = commitChecked(timeline, delta(`f${step}`, ops));
+      }, `step ${step}: ${JSON.stringify(ops)}`).not.toThrow();
+
+      if (next) timeline = next;
+      else expect(JSON.stringify(timeline)).toBe(before);
+
+      // Whatever happened, the invariant holds.
+      expect(timeline.current).toEqual(replay(timeline));
+    }
+  });
+});
+
+describe("replaceHead — a superseded Δ is not an abandoned one", () => {
+  it("keeps one entry per question", () => {
+    const provisional = commit(createTimeline(base), delta("provisional", addCard("prov")));
+    const better = replaceHead(provisional, delta("better", addCard("real")))!;
+
+    expect(better.entries).toHaveLength(1);
+    expect(better.cursor).toBe(1);
+    expect(better.entries[0].delta.label).toBe("better");
+  });
+
+  it("records nothing as discarded", () => {
+    // `back` then `commit` would count the provisional as a branch the visitor
+    // walked away from, which would inflate that counter on every question.
+    const provisional = commit(createTimeline(base), delta("provisional", addCard("prov")));
+    const better = replaceHead(provisional, delta("better", addCard("real")))!;
+    expect(better.discarded).toEqual([]);
+    expect(canGoForward(better)).toBe(false);
+  });
+
+  it("leaves nothing behind from the Δ it replaced", () => {
+    const provisional = commit(createTimeline(base), delta("provisional", addCard("prov")));
+    const better = replaceHead(provisional, delta("better", addCard("real")))!;
+
+    expect(better.current.elements.prov).toBeUndefined();
+    expect(better.current.elements.page.children).not.toContain("prov");
+    expect(better.current.elements.real).toBeDefined();
+    expect(better.current).toEqual(replay(better));
+  });
+
+  it("still walks all the way back to S₀", () => {
+    let t = commit(createTimeline(base), delta("one", addCard("one")));
+    t = replaceHead(t, delta("one-better", addCard("one-real")))!;
+    t = commit(t, delta("two", addCard("two")));
+    t = replaceHead(t, delta("two-better", addCard("two-real")))!;
+
+    expect(t.entries).toHaveLength(2);
+    expect(back(back(t)).current).toEqual(base);
+  });
+
+  it("refuses when there is nothing at the cursor", () => {
+    expect(replaceHead(createTimeline(base), delta("x", addCard("x")))).toBeNull();
+  });
+
+  it("refuses a replacement that does not apply, leaving the original", () => {
+    const provisional = commit(createTimeline(base), delta("provisional", addCard("prov")));
+    const bad = delta("bad", [{ kind: "attach", parent: "nope", child: "page" }]);
+    expect(replaceHead(provisional, bad)).toBeNull();
+    expect(provisional.current.elements.prov).toBeDefined();
   });
 });
 

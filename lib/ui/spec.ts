@@ -1,5 +1,5 @@
 import { validateSpec, type Spec } from "@json-render/core";
-import { portfolioCatalog } from "@/lib/ui/catalog";
+import { portfolioCatalog, propsMatchComponents } from "@/lib/ui/catalog";
 
 /**
  * S₀ — the state every path can return to.
@@ -29,6 +29,12 @@ export function parsePortfolioSpec(input: unknown) {
   const spec = catalogResult.data as Spec;
   const structuralResult = validateSpec(spec);
   if (!structuralResult.valid) return null;
+
+  // The catalog accepts props it should not, so they are checked against the
+  // component declarations as well.
+  if (!propsMatchComponents(spec.elements as Record<string, { type: string; props?: unknown }>)) {
+    return null;
+  }
 
   return spec;
 }

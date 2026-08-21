@@ -89,6 +89,58 @@ export function commit(timeline: Timeline, delta: Delta): Timeline {
   };
 }
 
+/**
+ * Apply a Δ, or refuse it.
+ *
+ * `commit` throws when a Δ is not applicable — a node attached before it was
+ * registered, a parent that does not exist — which is correct for a kernel and
+ * fatal for a caller. A Δ authored by a model is untrusted input, and one that
+ * attached `d1-palmares-summary` without registering it took the whole page down
+ * from inside a React state updater.
+ *
+ * Every entry point outside this module uses this instead, and
+ * `L0.TIMELINE_IS_ENTERED_THROUGH_THE_CHECKED_COMMIT` keeps it that way.
+ */
+export function commitChecked(timeline: Timeline, delta: Delta): Timeline | null {
+  try {
+    return commit(timeline, delta);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Replace the Δ at the cursor with a better one.
+ *
+ * Superseding is not abandoning. A provisional answer that a model then
+ * improves on is one intent with two authors, so the entry is replaced rather
+ * than rewound-and-recommitted: the journal keeps one Δ per question, and the
+ * discarded-branch count stays reserved for what it means — an experiment the
+ * visitor walked away from.
+ *
+ * Returns null if there is nothing at the cursor, or if the replacement does
+ * not apply to the state the original was applied to.
+ */
+export function replaceHead(timeline: Timeline, delta: Delta): Timeline | null {
+  if (!canGoBack(timeline)) return null;
+
+  const entry = timeline.entries[timeline.cursor - 1];
+  let rolledBack: Spec;
+  try {
+    rolledBack = applyOps(timeline.current, entry.inverse).next;
+  } catch {
+    return null;
+  }
+
+  const withoutHead: Timeline = {
+    ...timeline,
+    current: rolledBack,
+    entries: timeline.entries.slice(0, timeline.cursor - 1),
+    cursor: timeline.cursor - 1,
+  };
+  return commitChecked(withoutHead, delta);
+}
+
 /** Undo the Δ at the cursor by running its recorded inverse. */
 export function back(timeline: Timeline): Timeline {
   if (!canGoBack(timeline)) return timeline;
