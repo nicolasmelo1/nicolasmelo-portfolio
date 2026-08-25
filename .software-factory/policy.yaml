@@ -33,11 +33,8 @@ rules:
       exclude:
       - app/api/**
   # L1 — A skipped or expected-to-fail test says why
-  # Disabled deliberately: the catalog ships a python-only query for this rule
-  # and this repository is typescript-only, so enabled it could never fire.
-  # Enabled-and-inert is a rule that lies about its own coverage (L5.NO_INERT_RULE).
   L1.SKIPPED_TESTS_STATE_A_REASON:
-    enabled: false
+    enabled: true
   # L2 — The guardrail's own configuration is hash-locked
   L2.FACTORY_CONFIG_IS_LOCKED:
     enabled: true
